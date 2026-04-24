@@ -48,7 +48,7 @@ export default function Contacto() {
             </div>
             <div>
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Correo Electrónico</p>
-              <p className="text-lg font-black text-slate-800">PROXIMAMENTE!</p>
+              <p className="text-lg font-black text-slate-800">PROXIMAMENTE</p>
             </div>
           </div>
 

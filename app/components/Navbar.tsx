@@ -25,7 +25,7 @@ export default function Navbar() {
             <img 
               src="/logo.png" 
               alt="FHL Filtros Logo" 
-              className="h-20 md:h-16 w-auto object-contain hover:opacity-80 transition-opacity"
+              className="h-15 md:h-16 w-auto object-contain hover:opacity-80 transition-opacity"
             />
           </Link>
 

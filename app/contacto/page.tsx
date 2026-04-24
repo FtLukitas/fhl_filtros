@@ -26,7 +26,7 @@ export default function Contacto() {
             </div>
             <div>
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Ventas / WhatsApp</p>
-              <p className="text-lg font-black text-slate-800">+54 9 11 2869-4562</p>
+              <p className="text-lg font-black text-slate-800">+54 9 11 5953-4330</p>
             </div>
           </div>
 
@@ -37,7 +37,7 @@ export default function Contacto() {
             </div>
             <div>
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Taller / Administración</p>
-              <p className="text-lg font-black text-slate-800">+54 9 11 0000-0000</p>
+              <p className="text-lg font-black text-slate-800">+54 9 11 3167-9782</p>
             </div>
           </div>
 
@@ -48,7 +48,7 @@ export default function Contacto() {
             </div>
             <div>
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Correo Electrónico</p>
-              <p className="text-lg font-black text-slate-800">ventas@fhlfiltros.com</p>
+              <p className="text-lg font-black text-slate-800">PROXIMAMENTE!</p>
             </div>
           </div>
 

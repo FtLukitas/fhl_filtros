@@ -221,8 +221,8 @@ export default function FHLPage() {
                 className="bg-white p-5 rounded-xl border border-slate-200 hover:shadow-lg hover:border-blue-400 transition-all cursor-pointer transform hover:-translate-y-1 flex flex-col h-full group"
               >
                 <div className="flex justify-between items-start mb-2">
-                  <span className="text-blue-600 font-bold text-lg group-hover:text-blue-800">{f.codigo_fhl}</span>
-                  <span className="text-[10px] bg-blue-50 text-blue-500 px-2 py-1 rounded font-bold uppercase transition-colors group-hover:bg-blue-600 group-hover:text-white">Ver Detalle</span>
+                  <span className="text-blue-900 font-bold text-lg group-hover:text-red-500">{f.codigo_fhl}</span>
+                  <span className="text-[10px] bg-blue-50 text-blue-500 px-2 py-1 rounded font-bold uppercase transition-colors group-hover:bg-blue-900 group-hover:text-white">Ver Detalle</span>
                 </div>
                 
                 <p className="text-xs text-slate-400 uppercase font-semibold">Equivalencias</p>

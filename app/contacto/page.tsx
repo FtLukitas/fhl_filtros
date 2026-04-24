@@ -1,6 +1,6 @@
 export default function Contacto() {
   return (
-    <main className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+    <main className="min-h-screen bg-slate-50 flex flex-col items-center pt-12 md:pt-24 p-4">
       {/* TARJETA CENTRAL */}
       <div className="bg-white p-8 md:p-12 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.05)] border border-slate-200 w-full max-w-md text-center">
         

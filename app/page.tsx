@@ -9,6 +9,9 @@ const extraerMedida = (texto: string, etiqueta: string) => {
   const coincidencia = texto.match(regex);
   return coincidencia ? coincidencia[1] : '-';
 };
+const normalizarBusqueda = (texto: string) => {
+  return texto.replace(/[- ]/g, '').toLowerCase();
+};
 
 export default function FHLPage() {
   
@@ -35,17 +38,29 @@ export default function FHLPage() {
   // ==========================================
 
   // --- Buscador por Texto ---
+// --- Buscador por Texto ---
   useEffect(() => {
     const fetchPorTexto = async () => {
-      if (busqueda.length < 2) { setFiltrosTexto([]); return; }
+      // Normalizamos el input del usuario
+      const terminoLimpio = normalizarBusqueda(busqueda);
+
+      if (terminoLimpio.length < 2) { 
+        setFiltrosTexto([]); 
+        return; 
+      }
+
       setCargandoTexto(true);
+
       const { data } = await supabase
         .from('Tabla A')
         .select('*')
-        .or(`codigo_fhl.ilike.%${busqueda}%,equivalencias.ilike.%${busqueda}%`);
+        // Buscamos en las columnas generadas que no tienen guiones ni espacios
+        .or(`codigo_busqueda.ilike.%${terminoLimpio}%,equivalencias_busqueda.ilike.%${terminoLimpio}%`);
+    
       setFiltrosTexto(data || []);
       setCargandoTexto(false);
     };
+
     fetchPorTexto();
   }, [busqueda]);
 

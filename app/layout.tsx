@@ -1,6 +1,6 @@
   import type { Metadata } from "next";
 import "./globals.css";
-import Navbar from "./components/Navbar"; // Importamos tu nuevo Navbar
+import Navbar from "./components/Navbar"; // Importo nuevo Navbar
 
 export const metadata: Metadata = {
   title: "FHL Filtros - Catálogo Online",

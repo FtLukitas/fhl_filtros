@@ -17,7 +17,7 @@ export default function Navbar() {
   return (
     <nav className="bg-blue-900 border-b border-slate-200 sticky top-0 z-[110] shadow-sm">
       <div className="max-w-6xl mx-auto px-4">
-        {/* ALTURA: h-20 en móvil, h-24 en desktop */}
+        {/* ALTURA: h-20 en mobile, h-24 en desktop */}
         <div className="flex justify-between items-center h-20 md:h-24">
           
           {/* LOGO */}
@@ -29,7 +29,7 @@ export default function Navbar() {
             />
           </Link>
 
-          {/* BOTÓN HAMBURGUESA (Solo se ve en móviles) */}
+          {/* BOTON HAMBURGUESA (Solo se ve en mobile) */}
           <button 
             onClick={() => setIsOpen(!isOpen)}
             className="md:hidden p-2 text-white focus:outline-none"
@@ -43,7 +43,7 @@ export default function Navbar() {
             </svg>
           </button>
 
-          {/* LINKS DESKTOP (Se ocultan en móviles) */}
+          {/* LINKS DESKTOP (Se ocultan en mobile) */}
           <div className="hidden md:flex gap-4">
             {links.map((link) => {
               const isActive = pathname === link.href;

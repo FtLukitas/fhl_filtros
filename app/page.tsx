@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { supabase } from '../lib/supabase';
+import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 
 const extraerMedida = (texto: string, etiqueta: string) => {
   if (!texto) return '-';
@@ -9,15 +10,19 @@ const extraerMedida = (texto: string, etiqueta: string) => {
   const coincidencia = texto.match(regex);
   return coincidencia ? coincidencia[1] : '-';
 };
+
 const normalizarBusqueda = (texto: string) => {
   return texto.replace(/[- ]/g, '').toLowerCase();
 };
 
-export default function FHLPage() {
-  
-  // ==========================================
-  // 1. ESTADOS
-  // ==========================================
+// Componente interno que maneja la lógica del catálogo
+function CatalogoFHL() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
+
+  // Leemos si hay un código de filtro en la URL (ej: ?filtro=FHL103)
+  const filtroUrl = searchParams.get('filtro');
 
   // --- Buscador por Texto ---
   const [busqueda, setBusqueda] = useState('');
@@ -34,27 +39,60 @@ export default function FHLPage() {
   const [filtroDetalle, setFiltroDetalle] = useState<any>(null);
 
   // ==========================================
-  // 2. LÓGICA
+  // LÓGICA DE CONTROL DEL MODAL POR URL
+  // ==========================================
+  useEffect(() => {
+    if (!filtroUrl) {
+      setFiltroDetalle(null);
+      return;
+    }
+
+    // Si hay un filtro en la URL, lo buscamos directamente en Supabase.
+    // Esto permite que si alguien entra directo desde un link compartido, cargue al instante.
+    const cargarFiltroPorUrl = async () => {
+      const { data } = await supabase
+        .from('Tabla A')
+        .select('*')
+        .eq('codigo_fhl', filtroUrl)
+        .single();
+      
+      if (data) {
+        setFiltroDetalle(data);
+      } else {
+        // Si el código de la URL no existe, limpiamos el parámetro
+        router.replace(pathname, { scroll: false });
+      }
+    };
+
+    cargarFiltroPorUrl();
+  }, [filtroUrl, pathname, router]);
+
+  // Funciones auxiliares para abrir y cerrar actualizando la barra de direcciones
+  const abrirFiltro = (codigo: string) => {
+    router.push(`?filtro=${codigo}`, { scroll: false });
+  };
+
+  const cerrarModal = () => {
+    router.push(pathname, { scroll: false });
+  };
+
+  // ==========================================
+  // LÓGICA DE BÚSQUEDA EXISTENTE
   // ==========================================
 
   // --- Buscador por Texto ---
-// --- Buscador por Texto ---
   useEffect(() => {
     const fetchPorTexto = async () => {
-      // Normalizamos el input del usuario
       const terminoLimpio = normalizarBusqueda(busqueda);
-
       if (terminoLimpio.length < 2) { 
         setFiltrosTexto([]); 
         return; 
       }
-
       setCargandoTexto(true);
 
       const { data } = await supabase
         .from('Tabla A')
         .select('*')
-        // Buscamos en las columnas generadas que no tienen guiones ni espacios
         .or(`codigo_busqueda.ilike.%${terminoLimpio}%,equivalencias_busqueda.ilike.%${terminoLimpio}%`);
     
       setFiltrosTexto(data || []);
@@ -67,7 +105,6 @@ export default function FHLPage() {
   // --- Cargar Marcas desde la Vista ---
   useEffect(() => {
     const getMarcas = async () => {
-      // Consultamos la vista que ya tiene los nombres únicos
       const { data } = await supabase.from('marcas_unicas').select('marca').order('marca');
       if (data) {
         setOpciones(prev => ({ ...prev, marcas: data.map(i => i.marca) }));
@@ -115,17 +152,12 @@ export default function FHLPage() {
     setCargandoVehiculo(false);
   };
   
-  // ==========================================
-  // 3. INTERFAZ
-  // ==========================================
-  
   return (
     <main className="min-h-screen bg-gray-50 p-4 md:p-10 text-slate-800 relative">
       <div className="max-w-6xl mx-auto">
         
         {/* ENCABEZADO */}
         <header className="mb-10 text-center">
-          
           <p className="text-slate-500 uppercase tracking-widest text-sm">Catálogo Industrial de Filtros de Habitáculo</p>
         </header>
 
@@ -171,7 +203,7 @@ export default function FHLPage() {
             </button>
           </div>
 
-          {/* LISTA DE RESULTADOS (Ajustada con Marca y Modelo como título) */}
+          {/* LISTA DE RESULTADOS */}
           {listaResultados.length > 0 && (
             <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-4 animate-in fade-in slide-in-from-top-4">
               {listaResultados.map((v, index) => (
@@ -198,10 +230,7 @@ export default function FHLPage() {
                       {v.filtro_asociado}
                     </span>
                     <button 
-                      onClick={async () => {
-                        const { data } = await supabase.from('Tabla A').select('*').eq('codigo_fhl', v.filtro_asociado).single();
-                        if (data) setFiltroDetalle(data);
-                      }}
+                      onClick={() => abrirFiltro(v.filtro_asociado)}
                       className="text-[10px] bg-slate-800 text-white px-3 py-1.5 rounded font-bold uppercase transition-colors hover:bg-blue-600"
                     >
                       Ver Detalle
@@ -232,7 +261,7 @@ export default function FHLPage() {
             {filtrosTexto.map((f) => (
               <div 
                 key={f.id} 
-                onClick={() => setFiltroDetalle(f)}
+                onClick={() => abrirFiltro(f.codigo_fhl)}
                 className="bg-white p-5 rounded-xl border border-slate-200 hover:shadow-lg hover:border-blue-400 transition-all cursor-pointer transform hover:-translate-y-1 flex flex-col h-full group"
               >
                 <div className="flex justify-between items-start mb-2">
@@ -275,7 +304,7 @@ export default function FHLPage() {
                 <span className="text-[10px] font-bold text-blue-300 uppercase tracking-widest">Ficha Técnica FHL</span>
                 <h3 className="text-3xl font-black">{filtroDetalle.codigo_fhl}</h3>
               </div>
-              <button onClick={() => setFiltroDetalle(null)} className="text-white hover:text-red-400 font-black text-3xl w-10 h-10 flex items-center justify-center rounded-full hover:bg-white/10 transition-colors">&times;</button>
+              <button onClick={cerrarModal} className="text-white hover:text-red-400 font-black text-3xl w-10 h-10 flex items-center justify-center rounded-full hover:bg-white/10 transition-colors">&times;</button>
             </div>
 
             <div className="p-6 overflow-y-auto">
@@ -318,5 +347,14 @@ export default function FHLPage() {
         <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
       </a>
     </main>
+  );
+}
+
+// Exportación obligatoria con Suspense para manejar searchParams correctamente en Next.js
+export default function FHLPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-gray-50 flex items-center justify-center font-medium text-slate-400">Cargando catálogo...</div>}>
+      <CatalogoFHL />
+    </Suspense>
   );
 }

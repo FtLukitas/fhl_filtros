@@ -90,6 +90,7 @@ function CatalogoFHL() {
   };
 
   const cerrarModal = useCallback(() => {
+    setFiltroDetalle(null);
     router.replace(pathname, { scroll: false });
   }, [pathname, router]);
 

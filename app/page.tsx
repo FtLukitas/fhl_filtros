@@ -1,8 +1,7 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
+import { useState, useEffect, useCallback, Suspense } from 'react';
 import { supabase } from '../lib/supabase';
-import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 
 const extraerMedida = (texto: string, etiqueta: string) => {
   if (!texto) return '-';
@@ -32,15 +31,6 @@ const copiarAlPortapapeles = async (texto: string) => {
 
 // Componente interno que maneja la lógica del catálogo
 function CatalogoFHL() {
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const pathname = usePathname();
-
-  // Leemos si hay un código de filtro en la URL (ej: ?filtro=FHL103)
-  const filtroUrl = searchParams.get('filtro');
-
-  // Referencia para detectar si el usuario llegó con un link directo
-  const esLinkDirecto = useRef(!!filtroUrl);
 
   // --- Buscador por Texto ---
   const [busqueda, setBusqueda] = useState('');
@@ -58,61 +48,71 @@ function CatalogoFHL() {
   const [copiado, setCopiado] = useState(false);
 
   // ==========================================
-  // SETUP DEL HISTORIAL PARA BOTÓN ATRÁS
+  // MANEJO DE APERTURA/CIERRE DEL MODAL
   // ==========================================
-  // Si el usuario llegó con un ?filtro=... en la URL (link compartido),
-  // reacomodamos el historial para que el botón "atrás" cierre el modal
-  // en vez de salir de la página.
-  useEffect(() => {
-    if (esLinkDirecto.current) {
-      const urlLimpia = window.location.pathname;
-      window.history.replaceState(null, '', urlLimpia);
-      window.history.pushState(null, '', `?filtro=${filtroUrl}`);
-    }
-  }, []);
 
-  // ==========================================
-  // LÓGICA DE CONTROL DEL MODAL POR URL
-  // ==========================================
-  useEffect(() => {
-    if (!filtroUrl) {
-      setFiltroDetalle(null);
-      return;
-    }
-
-    // Si hay un filtro en la URL, lo buscamos directamente en Supabase.
-    // Esto permite que si alguien entra directo desde un link compartido, cargue al instante.
-    const cargarFiltroPorUrl = async () => {
-      const { data } = await supabase
-        .from('Tabla A')
-        .select('*')
-        .eq('codigo_fhl', filtroUrl)
-        .single();
-      
-      if (data) {
-        setFiltroDetalle(data);
-      } else {
-        // Si el código de la URL no existe, limpiamos el parámetro
-        router.replace(pathname, { scroll: false });
-      }
-    };
-
-    cargarFiltroPorUrl();
-  }, [filtroUrl, pathname, router]);
-
-  // Funciones auxiliares para abrir y cerrar actualizando la barra de direcciones
-  const abrirFiltro = (codigo: string) => {
-    router.push(`?filtro=${codigo}`, { scroll: false });
+  const abrirFiltro = async (codigo: string) => {
+    window.history.pushState(null, '', `?filtro=${codigo}`);
+    const { data } = await supabase
+      .from('Tabla A')
+      .select('*')
+      .eq('codigo_fhl', codigo)
+      .single();
+    if (data) setFiltroDetalle(data);
   };
 
   const cerrarModal = useCallback(() => {
     setFiltroDetalle(null);
-    router.replace(pathname, { scroll: false });
-  }, [pathname, router]);
+    window.history.replaceState(null, '', window.location.pathname);
+  }, []);
+
+  // Cargar filtro desde URL al montar (link directo externo)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const codigo = params.get('filtro');
+    if (codigo) {
+      const cargar = async () => {
+        const { data } = await supabase
+          .from('Tabla A')
+          .select('*')
+          .eq('codigo_fhl', codigo)
+          .single();
+        if (data) {
+          setFiltroDetalle(data);
+          window.history.replaceState(null, '', window.location.pathname);
+          window.history.pushState(null, '', `?filtro=${codigo}`);
+        }
+      };
+      cargar();
+    }
+  }, []);
+
+  // Detectar navegación atrás/adelante del navegador
+  useEffect(() => {
+    const handlePopState = () => {
+      const params = new URLSearchParams(window.location.search);
+      const codigo = params.get('filtro');
+      if (codigo) {
+        const cargar = async () => {
+          const { data } = await supabase
+            .from('Tabla A')
+            .select('*')
+            .eq('codigo_fhl', codigo)
+            .single();
+          if (data) setFiltroDetalle(data);
+        };
+        cargar();
+      } else {
+        setFiltroDetalle(null);
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   const compartirFiltro = useCallback(async () => {
     if (!filtroDetalle?.codigo_fhl) return;
-    const url = `${window.location.origin}${pathname}?filtro=${filtroDetalle.codigo_fhl}`;
+    const url = `${window.location.origin}${window.location.pathname}?filtro=${filtroDetalle.codigo_fhl}`;
     try {
       if (navigator.share) {
         await navigator.share({ title: `FHL ${filtroDetalle.codigo_fhl}`, url });
@@ -122,7 +122,7 @@ function CatalogoFHL() {
     await copiarAlPortapapeles(url);
     setCopiado(true);
     setTimeout(() => setCopiado(false), 1500);
-  }, [pathname, filtroDetalle]);
+  }, [filtroDetalle]);
 
   // Cerrar con tecla Escape
   useEffect(() => {

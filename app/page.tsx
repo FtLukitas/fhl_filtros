@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, Suspense } from 'react';
-import { useRouter, usePathname, useSearchParams } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import { supabase } from '../lib/supabase';
 
 const extraerMedida = (texto: string, etiqueta: string) => {
@@ -32,7 +32,6 @@ const copiarAlPortapapeles = async (texto: string) => {
 
 // Componente interno que maneja la lógica del catálogo
 function CatalogoFHL() {
-  const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
@@ -56,7 +55,9 @@ function CatalogoFHL() {
   // ==========================================
 
   const abrirFiltro = (codigo: string) => {
-    router.push(`?filtro=${codigo}`, { scroll: false });
+    const params = new URLSearchParams(searchParams.toString());
+    params.set('filtro', codigo);
+    window.history.pushState(null, '', `${pathname}?${params.toString()}`);
   };
 
   const cerrarModal = useCallback(() => {
@@ -64,8 +65,8 @@ function CatalogoFHL() {
     const params = new URLSearchParams(searchParams.toString());
     params.delete('filtro');
     const nuevaUrl = params.toString() ? `${pathname}?${params.toString()}` : pathname;
-    router.push(nuevaUrl, { scroll: false });
-  }, [router, pathname, searchParams]);
+    window.history.pushState(null, '', nuevaUrl);
+  }, [pathname, searchParams]);
 
   // Cargar filtro desde URL (única fuente de verdad: searchParams)
   useEffect(() => {

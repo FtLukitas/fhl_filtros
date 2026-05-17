@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, Suspense } from 'react';
+import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { supabase } from '../lib/supabase';
 
 const extraerMedida = (texto: string, etiqueta: string) => {
@@ -31,6 +32,9 @@ const copiarAlPortapapeles = async (texto: string) => {
 
 // Componente interno que maneja la lógica del catálogo
 function CatalogoFHL() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
 
   // --- Buscador por Texto ---
   const [busqueda, setBusqueda] = useState('');
@@ -51,68 +55,53 @@ function CatalogoFHL() {
   // MANEJO DE APERTURA/CIERRE DEL MODAL
   // ==========================================
 
-  const abrirFiltro = async (codigo: string) => {
-    window.history.pushState(null, '', `?filtro=${codigo}`);
-    const { data } = await supabase
-      .from('Tabla A')
-      .select('*')
-      .eq('codigo_fhl', codigo)
-      .single();
-    if (data) setFiltroDetalle(data);
+  const abrirFiltro = (codigo: string) => {
+    router.push(`?filtro=${codigo}`, { scroll: false });
   };
 
   const cerrarModal = useCallback(() => {
     setFiltroDetalle(null);
-    window.history.replaceState(null, '', window.location.pathname);
-  }, []);
+    router.replace(pathname, { scroll: false });
+  }, [router, pathname]);
 
-  // Cargar filtro desde URL al montar (link directo externo)
+  // Cargar filtro desde URL (única fuente de verdad: searchParams)
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const codigo = params.get('filtro');
-    if (codigo) {
-      const cargar = async () => {
+    const codigo = searchParams.get('filtro');
+    if (!codigo) {
+      setFiltroDetalle(null);
+      return;
+    }
+
+    const abortController = new AbortController();
+
+    const cargar = async () => {
+      try {
         const { data } = await supabase
           .from('Tabla A')
           .select('*')
           .eq('codigo_fhl', codigo)
           .single();
-        if (data) {
-          setFiltroDetalle(data);
-          window.history.replaceState(null, '', window.location.pathname);
-          window.history.pushState(null, '', `?filtro=${codigo}`);
-        }
-      };
-      cargar();
-    }
-  }, []);
 
-  // Detectar navegación atrás/adelante del navegador
-  useEffect(() => {
-    const handlePopState = () => {
-      const params = new URLSearchParams(window.location.search);
-      const codigo = params.get('filtro');
-      if (codigo) {
-        const cargar = async () => {
-          const { data } = await supabase
-            .from('Tabla A')
-            .select('*')
-            .eq('codigo_fhl', codigo)
-            .single();
-          if (data) setFiltroDetalle(data);
-        };
-        cargar();
-      } else {
-        setFiltroDetalle(null);
+        if (!abortController.signal.aborted && data) {
+          setFiltroDetalle(data);
+        }
+      } catch (err: any) {
+        if (err.name !== 'AbortError') {
+          console.error(err);
+        }
       }
     };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
+
+    cargar();
+
+    return () => {
+      abortController.abort();
+    };
+  }, [searchParams]);
 
   const compartirFiltro = useCallback(async () => {
     if (!filtroDetalle?.codigo_fhl) return;
-    const url = `${window.location.origin}${window.location.pathname}?filtro=${filtroDetalle.codigo_fhl}`;
+    const url = `${window.location.origin}${pathname}?filtro=${filtroDetalle.codigo_fhl}`;
     try {
       if (navigator.share) {
         await navigator.share({ title: `FHL ${filtroDetalle.codigo_fhl}`, url });
@@ -122,7 +111,7 @@ function CatalogoFHL() {
     await copiarAlPortapapeles(url);
     setCopiado(true);
     setTimeout(() => setCopiado(false), 1500);
-  }, [filtroDetalle]);
+  }, [filtroDetalle, pathname]);
 
   // Cerrar con tecla Escape
   useEffect(() => {

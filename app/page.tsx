@@ -61,8 +61,11 @@ function CatalogoFHL() {
 
   const cerrarModal = useCallback(() => {
     setFiltroDetalle(null);
-    router.replace(pathname, { scroll: false });
-  }, [router, pathname]);
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('filtro');
+    const nuevaUrl = params.toString() ? `${pathname}?${params.toString()}` : pathname;
+    router.push(nuevaUrl, { scroll: false });
+  }, [router, pathname, searchParams]);
 
   // Cargar filtro desde URL (única fuente de verdad: searchParams)
   useEffect(() => {

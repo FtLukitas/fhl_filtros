@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { supabase } from '../lib/supabase';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 
@@ -24,6 +24,9 @@ function CatalogoFHL() {
   // Leemos si hay un código de filtro en la URL (ej: ?filtro=FHL103)
   const filtroUrl = searchParams.get('filtro');
 
+  // Referencia para detectar si el usuario llegó con un link directo
+  const esLinkDirecto = useRef(!!filtroUrl);
+
   // --- Buscador por Texto ---
   const [busqueda, setBusqueda] = useState('');
   const [filtrosTexto, setFiltrosTexto] = useState<any[]>([]);
@@ -37,6 +40,20 @@ function CatalogoFHL() {
 
   // --- Estado del Modal ---
   const [filtroDetalle, setFiltroDetalle] = useState<any>(null);
+
+  // ==========================================
+  // SETUP DEL HISTORIAL PARA BOTÓN ATRÁS
+  // ==========================================
+  // Si el usuario llegó con un ?filtro=... en la URL (link compartido),
+  // reacomodamos el historial para que el botón "atrás" cierre el modal
+  // en vez de salir de la página.
+  useEffect(() => {
+    if (esLinkDirecto.current) {
+      const urlLimpia = window.location.pathname;
+      window.history.replaceState(null, '', urlLimpia);
+      window.history.pushState(null, '', `?filtro=${filtroUrl}`);
+    }
+  }, []);
 
   // ==========================================
   // LÓGICA DE CONTROL DEL MODAL POR URL
@@ -72,9 +89,19 @@ function CatalogoFHL() {
     router.push(`?filtro=${codigo}`, { scroll: false });
   };
 
-  const cerrarModal = () => {
-    router.push(pathname, { scroll: false });
-  };
+  const cerrarModal = useCallback(() => {
+    router.replace(pathname, { scroll: false });
+  }, [pathname, router]);
+
+  // Cerrar con tecla Escape
+  useEffect(() => {
+    if (!filtroDetalle) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') cerrarModal();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [filtroDetalle, cerrarModal]);
 
   // ==========================================
   // LÓGICA DE BÚSQUEDA EXISTENTE
@@ -296,8 +323,8 @@ function CatalogoFHL() {
 
       {/* MODAL (DETALLE DEL FILTRO) */}
       {filtroDetalle && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[900] flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95 relative">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[900] flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={cerrarModal}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95 relative" onClick={(e) => e.stopPropagation()}>
             
             <div className="bg-blue-900 p-6 flex justify-between items-center text-white">
               <div>

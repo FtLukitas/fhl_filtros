@@ -15,6 +15,21 @@ const normalizarBusqueda = (texto: string) => {
   return texto.replace(/[- ]/g, '').toLowerCase();
 };
 
+const copiarAlPortapapeles = async (texto: string) => {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(texto);
+  } else {
+    const el = document.createElement('textarea');
+    el.value = texto;
+    el.style.position = 'fixed';
+    el.style.opacity = '0';
+    document.body.appendChild(el);
+    el.select();
+    document.execCommand('copy');
+    document.body.removeChild(el);
+  }
+};
+
 // Componente interno que maneja la lógica del catálogo
 function CatalogoFHL() {
   const router = useRouter();
@@ -40,6 +55,7 @@ function CatalogoFHL() {
 
   // --- Estado del Modal ---
   const [filtroDetalle, setFiltroDetalle] = useState<any>(null);
+  const [copiado, setCopiado] = useState(false);
 
   // ==========================================
   // SETUP DEL HISTORIAL PARA BOTÓN ATRÁS
@@ -93,6 +109,20 @@ function CatalogoFHL() {
     setFiltroDetalle(null);
     router.replace(pathname, { scroll: false });
   }, [pathname, router]);
+
+  const compartirFiltro = useCallback(async () => {
+    if (!filtroDetalle?.codigo_fhl) return;
+    const url = `${window.location.origin}${pathname}?filtro=${filtroDetalle.codigo_fhl}`;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: `FHL ${filtroDetalle.codigo_fhl}`, url });
+        return;
+      }
+    } catch {}
+    await copiarAlPortapapeles(url);
+    setCopiado(true);
+    setTimeout(() => setCopiado(false), 1500);
+  }, [pathname, filtroDetalle]);
 
   // Cerrar con tecla Escape
   useEffect(() => {
@@ -332,7 +362,22 @@ function CatalogoFHL() {
                 <span className="text-[10px] font-bold text-blue-300 uppercase tracking-widest">Ficha Técnica FHL</span>
                 <h3 className="text-3xl font-black">{filtroDetalle.codigo_fhl}</h3>
               </div>
-              <button onClick={cerrarModal} className="text-white hover:text-red-400 font-black text-3xl w-10 h-10 flex items-center justify-center rounded-full hover:bg-white/10 transition-colors">&times;</button>
+              <div className="flex items-center gap-8">
+                <div className="flex flex-col items-center">
+                  <button onClick={compartirFiltro} className="text-white hover:text-green-300 w-10 h-10 flex items-center justify-center rounded-full hover:bg-white/10 transition-colors" title="Compartir">
+                    {copiado ? (
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+                    ) : (
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+                    )}
+                  </button>
+                  <span className="text-[10px] text-blue-200">{copiado ? 'Copiado' : 'Compartir'}</span>
+                </div>
+                <div className="flex flex-col items-center">
+                  <button onClick={cerrarModal} className="text-white hover:text-red-400 font-black text-3xl w-10 h-10 flex items-center justify-center rounded-full hover:bg-white/10 transition-colors">&times;</button>
+                  <span className="text-[10px] text-blue-200">Salir</span>
+                </div>
+              </div>
             </div>
 
             <div className="p-6 overflow-y-auto">

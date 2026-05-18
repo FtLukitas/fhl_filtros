@@ -73,9 +73,11 @@ function CatalogoFHL() {
     window.dispatchEvent(new PopStateEvent('popstate'));
   }, [pathname, searchParams]);
 
-  // Cargar filtro desde URL (única fuente de verdad: searchParams)
+  // Cargar filtro desde URL (Sincronización híbrida para evadir caché de Next.js)
   useEffect(() => {
-    const codigo = searchParams.get('filtro');
+    // Forzamos la lectura de la URL real del navegador, ignorando la caché stale de Next.js
+    const paramsReales = new URLSearchParams(window.location.search);
+    const codigo = paramsReales.get('filtro');
     if (!codigo) {
       setFiltroDetalle(null);
       return;

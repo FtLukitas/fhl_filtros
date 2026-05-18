@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, Suspense } from 'react';
-import { usePathname, useSearchParams } from 'next/navigation';
+import { usePathname, useSearchParams, useRouter } from 'next/navigation';
 import { supabase } from '../lib/supabase';
 
 const extraerMedida = (texto: string, etiqueta: string) => {
@@ -34,6 +34,7 @@ const copiarAlPortapapeles = async (texto: string) => {
 function CatalogoFHL() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const router = useRouter();
 
   // --- Buscador por Texto ---
   const [busqueda, setBusqueda] = useState('');
@@ -65,8 +66,9 @@ function CatalogoFHL() {
     const params = new URLSearchParams(searchParams.toString());
     params.delete('filtro');
     const nuevaUrl = params.toString() ? `${pathname}?${params.toString()}` : pathname;
-    window.history.pushState(null, '', nuevaUrl);
-  }, [pathname, searchParams]);
+
+    router.push(nuevaUrl, { scroll: false });
+  }, [pathname, searchParams, router]);
 
   // Cargar filtro desde URL (única fuente de verdad: searchParams)
   useEffect(() => {

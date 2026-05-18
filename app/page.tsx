@@ -144,7 +144,7 @@ function CatalogoFHL() {
       const { data } = await supabase
         .from('Tabla A')
         .select('*')
-        .or(`codigo_busqueda.ilike.%${terminoLimpio}%,equivalencias_busqueda.ilike.%${terminoLimpio}%`);
+        .ilike('buscador_unificado', `%${terminoLimpio}%`);
     
       setFiltrosTexto(data || []);
       setCargandoTexto(false);

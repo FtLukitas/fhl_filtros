@@ -2,11 +2,12 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 
 export default function Navbar() {
   const [isOpen, setIsOpen] = useState(false);
   const pathname = usePathname();
+  const router = useRouter();
 
   const links = [
     { name: 'Inicio', href: '/' },
@@ -45,7 +46,17 @@ export default function Navbar() {
 
           {/* LINKS DESKTOP (Se ocultan en mobile) */}
           <div className="hidden md:flex gap-4">
-            {links.map((link) => {
+            <button
+              onClick={() => router.push('/')}
+              className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
+                pathname === '/' 
+                  ? 'bg-red-600 text-white shadow-red-200'
+                  : 'text-white hover:text-blue-900 hover:bg-slate-50'
+              }`}
+            >
+              Inicio
+            </button>
+            {links.slice(1).map((link) => {
               const isActive = pathname === link.href;
               return (
                 <Link
@@ -67,7 +78,20 @@ export default function Navbar() {
         {/* MENÚ MÓVIL DESPLEGABLE */}
         <div className={`md:hidden overflow-hidden transition-all duration-300 ease-in-out ${isOpen ? 'max-h-64 pb-6' : 'max-h-0'}`}>
           <div className="flex flex-col gap-2">
-            {links.map((link) => {
+            <button
+              onClick={() => {
+                router.push('/');
+                setIsOpen(false);
+              }}
+              className={`px-4 py-3 rounded-xl text-base font-bold ${
+                pathname === '/' 
+                  ? 'bg-red-600 text-white' 
+                  : 'text-slate-600 bg-slate-50'
+              }`}
+            >
+              Inicio
+            </button>
+            {links.slice(1).map((link) => {
               const isActive = pathname === link.href;
               return (
                 <Link

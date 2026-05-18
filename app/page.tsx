@@ -67,7 +67,10 @@ function CatalogoFHL() {
     params.delete('filtro');
     const nuevaUrl = params.toString() ? `${pathname}?${params.toString()}` : pathname;
 
-    router.push(nuevaUrl, { scroll: false });
+    // 1. Limpieza visual instantánea (soluciona que la URL no cambie)
+    window.history.replaceState(null, '', nuevaUrl);
+    // 2. Purgamos el estado inicial horneado en Next.js
+    router.replace(nuevaUrl, { scroll: false });
   }, [pathname, searchParams, router]);
 
   // Cargar filtro desde URL (única fuente de verdad: searchParams)

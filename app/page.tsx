@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, Suspense } from 'react';
-import { usePathname, useSearchParams, useRouter } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import { supabase } from '../lib/supabase';
 
 const extraerMedida = (texto: string, etiqueta: string) => {
@@ -34,7 +34,6 @@ const copiarAlPortapapeles = async (texto: string) => {
 function CatalogoFHL() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const router = useRouter();
 
   // --- Buscador por Texto ---
   const [busqueda, setBusqueda] = useState('');
@@ -66,12 +65,13 @@ function CatalogoFHL() {
     const params = new URLSearchParams(searchParams.toString());
     params.delete('filtro');
     const nuevaUrl = params.toString() ? `${pathname}?${params.toString()}` : pathname;
-
-    // 1. Limpieza visual instantánea (soluciona que la URL no cambie)
+    
+    // 1. Limpieza visual instantánea sin afectar el historial de navegación
     window.history.replaceState(null, '', nuevaUrl);
-    // 2. Purgamos el estado inicial horneado en Next.js
-    router.replace(nuevaUrl, { scroll: false });
-  }, [pathname, searchParams, router]);
+    
+    // 2. Forzamos al framework a leer la nueva URL despachando el evento nativo
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  }, [pathname, searchParams]);
 
   // Cargar filtro desde URL (única fuente de verdad: searchParams)
   useEffect(() => {

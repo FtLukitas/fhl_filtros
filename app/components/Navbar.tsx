@@ -2,18 +2,11 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 
 export default function Navbar() {
   const [isOpen, setIsOpen] = useState(false);
   const pathname = usePathname();
-  const router = useRouter();
-
-  const handleNavegacionInicio = (e: React.MouseEvent) => {
-    e.preventDefault();
-    router.replace('/', { scroll: true });
-    router.refresh();
-  };
 
   const links = [
     { name: 'Inicio', href: '/' },
@@ -53,7 +46,7 @@ export default function Navbar() {
           {/* LINKS DESKTOP (Se ocultan en mobile) */}
           <div className="hidden md:flex gap-4">
             <button
-              onClick={handleNavegacionInicio}
+              onClick={() => { window.location.href = '/'; }}
               className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
                 pathname === '/' 
                   ? 'bg-red-600 text-white shadow-red-200'
@@ -85,8 +78,8 @@ export default function Navbar() {
         <div className={`md:hidden overflow-hidden transition-all duration-300 ease-in-out ${isOpen ? 'max-h-64 pb-6' : 'max-h-0'}`}>
           <div className="flex flex-col gap-2">
             <button
-              onClick={(e) => {
-                handleNavegacionInicio(e);
+              onClick={() => {
+                window.location.href = '/';
                 setIsOpen(false);
               }}
               className={`px-4 py-3 rounded-xl text-base font-bold ${

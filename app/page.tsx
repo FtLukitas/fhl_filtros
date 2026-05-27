@@ -30,6 +30,20 @@ const copiarAlPortapapeles = async (texto: string) => {
   }
 };
 
+// Función purificadora para que Next.js no falle si las imágenes vienen en formatos raros desde la base
+const normalizarImagenes = (imagenes: any): string[] => {
+  if (!imagenes) return [];
+  if (Array.isArray(imagenes)) return imagenes;
+  if (typeof imagenes === 'string') {
+    try {
+      return JSON.parse(imagenes);
+    } catch {
+      return [];
+    }
+  }
+  return [];
+};
+
 // Componente interno que maneja la lógica del catálogo
 function CatalogoFHL() {
   const pathname = usePathname();
@@ -47,7 +61,9 @@ function CatalogoFHL() {
   const [cargandoVehiculo, setCargandoVehiculo] = useState(false);
 
   // --- Estado del Modal ---
-  const [filtroDetalle, setFiltroDetalle] = useState<any>(null);
+  const [filtroDetalle, setFiltroDetalle] = useState<Record<string, any> | null>(null);
+  const [indiceImagen, setIndiceImagen] = useState<number>(0);
+  const [zoomActivo, setZoomActivo] = useState(false);
   const [copiado, setCopiado] = useState(false);
 
   // ==========================================
@@ -93,6 +109,8 @@ function CatalogoFHL() {
 
         if (!abortController.signal.aborted && data) {
           setFiltroDetalle(data);
+          setIndiceImagen(0);
+          setZoomActivo(false); 
         }
       } catch (err: any) {
         if (err.name !== 'AbortError') {
@@ -208,6 +226,9 @@ function CatalogoFHL() {
     setCargandoVehiculo(false);
   };
   
+  // Procesamos la lista de imágenes limpia antes del render
+  const listaImagenes = normalizarImagenes(filtroDetalle?.imagen_url);
+
   return (
     <main className="min-h-screen bg-gray-50 p-4 md:p-10 text-slate-800 relative">
       <div className="max-w-6xl mx-auto">
@@ -382,6 +403,83 @@ function CatalogoFHL() {
               <div className="mb-6">
                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Equivalencias OEM / Cruzadas</p>
                 <p className="text-slate-700 font-medium">{filtroDetalle.equivalencias || 'Sin equivalencias registradas.'}</p>
+              </div>
+
+              {/* VISOR DE IMÁGENES */}
+              <div className="mb-6">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Vista del Producto</p>
+                
+                {listaImagenes.length > 0 ? (
+                  <div className="flex flex-col gap-3">
+                    {/* Foto Principal */}
+                    <div 
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 md:p-4 flex items-center justify-center h-[280px] md:h-[380px] overflow-hidden shadow-inner transition-all cursor-zoom-in hover:border-blue-300"
+                      onClick={() => setZoomActivo(true)}
+                    >
+                      <img
+                        src={listaImagenes[indiceImagen]}
+                        alt={`Filtro FHL ${filtroDetalle?.codigo_fhl || ''} - Vista ${indiceImagen + 1}`}
+                        className="w-full h-full object-contain mix-blend-multiply drop-shadow-md"
+                        loading="lazy"
+                      />
+                    </div>
+
+                    {/* Modal interno para Zoom a pantalla completa */}
+                    {zoomActivo && (
+                      <div 
+                        className="fixed inset-0 z-[1000] bg-slate-900/95 flex items-center justify-center p-4 md:p-10 cursor-zoom-out animate-in fade-in duration-200"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setZoomActivo(false);
+                        }}
+                      >
+                        <img
+                          src={listaImagenes[indiceImagen]}
+                          alt="Vista ampliada"
+                          className="max-w-full max-h-full object-contain drop-shadow-2xl"
+                        />
+                        <span className="absolute top-6 md:top-10 right-6 md:right-10 text-white font-bold bg-white/10 hover:bg-white/20 transition-colors px-4 py-2 rounded-full text-[10px] uppercase tracking-widest backdrop-blur-sm">
+                          Cerrar [X]
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Galería de Miniaturas */}
+                    {listaImagenes.length > 1 && (
+                      <div className="flex gap-3 overflow-x-auto py-2 justify-center scrollbar-hide">
+                        {listaImagenes.map((url: string, idx: number) => (
+                          <button
+                            key={idx}
+                            onClick={() => setIndiceImagen(idx)}
+                            className={`w-20 h-16 md:w-24 md:h-20 rounded-lg border-2 flex-shrink-0 overflow-hidden bg-slate-50 transition-all focus:outline-none ${
+                              indiceImagen === idx 
+                                ? 'border-blue-600 shadow-md scale-105 ring-2 ring-blue-100' 
+                                : 'border-slate-200 hover:border-blue-400 opacity-60 hover:opacity-100'
+                            }`}
+                          >
+                            <img 
+                              src={url} 
+                              className="w-full h-full object-contain p-1 mix-blend-multiply" 
+                              alt={`Miniatura ${idx + 1}`} 
+                            />
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  /* Placeholder Seguro si la celda está vacía */
+                  <div className="w-full bg-slate-50 border border-slate-200 rounded-xl p-6 flex items-center justify-center h-[260px] shadow-inner">
+                    <div className="text-slate-300 flex flex-col items-center gap-2 select-none">
+                      <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                        <circle cx="8.5" cy="8.5" r="1.5"/>
+                        <polyline points="21 15 16 10 5 21"/>
+                      </svg>
+                      <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Imagen no disponible</span>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="mb-6">

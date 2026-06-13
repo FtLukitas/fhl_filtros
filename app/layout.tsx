@@ -1,6 +1,7 @@
-  import type { Metadata } from "next";
+import type { Metadata } from "next";
 import "./globals.css";
 import Navbar from "./components/Navbar"; // Importo nuevo Navbar
+import Footer from "./components/Footer";
 
 export const metadata: Metadata = {
   title: "FHL Filtros - Catálogo Online",
@@ -14,9 +15,12 @@ export default function RootLayout({
 }) {
   return (
     <html lang="es">
-      <body className="antialiased">
+      <body className="antialiased flex flex-col min-h-screen">
         <Navbar /> {/* Se renderiza arriba de todo */}
-        {children}
+        <div className="flex-grow">
+          {children}
+        </div>
+        <Footer />
       </body>
     </html>
   );

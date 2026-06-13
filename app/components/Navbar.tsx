@@ -19,18 +19,18 @@ export default function Navbar() {
       <div className="max-w-6xl mx-auto px-4">
         {/* ALTURA: h-20 en mobile, h-24 en desktop */}
         <div className="flex justify-between items-center h-20 md:h-24">
-          
+
           {/* LOGO */}
           <Link href="/" className="flex items-center">
-            <img 
-              src="/logo.png" 
-              alt="FHL Filtros Logo" 
+            <img
+              src="/logo.png"
+              alt="FHL Filtros Logo"
               className="h-15 md:h-16 w-auto object-contain hover:opacity-80 transition-opacity"
             />
           </Link>
 
           {/* BOTON HAMBURGUESA (Solo se ve en mobile) */}
-          <button 
+          <button
             onClick={() => setIsOpen(!isOpen)}
             className="md:hidden p-2 text-white focus:outline-none"
           >
@@ -47,11 +47,10 @@ export default function Navbar() {
           <div className="hidden md:flex gap-4">
             <button
               onClick={() => { window.location.href = '/'; }}
-              className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
-                pathname === '/' 
-                  ? 'bg-red-600 text-white shadow-red-200'
-                  : 'text-white hover:text-blue-900 hover:bg-slate-50'
-              }`}
+              className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${pathname === '/'
+                ? 'bg-red-600 text-white shadow-red-200'
+                : 'text-white hover:text-blue-900 hover:bg-slate-50'
+                }`}
             >
               Inicio
             </button>
@@ -61,11 +60,10 @@ export default function Navbar() {
                 <Link
                   key={link.name}
                   href={link.href}
-                  className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
-                    isActive 
-                      ? 'bg-red-600 text-white shadow-red-200' // Activo: Rojo con texto blanco
-                      : 'text-white hover:text-blue-900 hover:bg-slate-50'
-                  }`}
+                  className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${isActive
+                    ? 'bg-red-600 text-white shadow-red-200' // Activo: Rojo con texto blanco
+                    : 'text-white hover:text-blue-900 hover:bg-slate-50'
+                    }`}
                 >
                   {link.name}
                 </Link>
@@ -82,11 +80,10 @@ export default function Navbar() {
                 window.location.href = '/';
                 setIsOpen(false);
               }}
-              className={`px-4 py-3 rounded-xl text-base font-bold ${
-                pathname === '/' 
-                  ? 'bg-red-600 text-white' 
-                  : 'text-slate-600 bg-slate-50'
-              }`}
+              className={`px-4 py-3 rounded-xl text-base font-bold text-left ${pathname === '/'
+                ? 'bg-red-600 text-white'
+                : 'text-slate-600 bg-slate-50'
+                }`}
             >
               Inicio
             </button>
@@ -97,11 +94,10 @@ export default function Navbar() {
                   key={link.name}
                   href={link.href}
                   onClick={() => setIsOpen(false)} // Cierra el menú al clickear
-                  className={`px-4 py-3 rounded-xl text-base font-bold ${
-                    isActive 
-                      ? 'bg-red-600 text-white' 
-                      : 'text-slate-600 bg-slate-50'
-                  }`}
+                  className={`px-4 py-3 rounded-xl text-base font-bold ${isActive
+                    ? 'bg-red-600 text-white'
+                    : 'text-slate-600 bg-slate-50'
+                    }`}
                 >
                   {link.name}
                 </Link>

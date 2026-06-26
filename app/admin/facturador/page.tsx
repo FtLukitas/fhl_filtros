@@ -213,11 +213,10 @@ export default function FacturadorPage() {
       {/* Mensaje flotante */}
       {mensaje && (
         <div
-          className={`px-4 py-3 rounded-md text-sm font-medium border transition-all ${
-            mensaje.tipo === 'ok'
-              ? 'bg-green-50 text-green-700 border-green-200'
-              : 'bg-red-50 text-red-700 border-red-200'
-          }`}
+          className={`px-4 py-3 rounded-md text-sm font-medium border transition-all ${mensaje.tipo === 'ok'
+            ? 'bg-green-50 text-green-700 border-green-200'
+            : 'bg-red-50 text-red-700 border-red-200'
+            }`}
         >
           {mensaje.texto}
         </div>
@@ -241,7 +240,7 @@ export default function FacturadorPage() {
             <BuscadorFiltroAutocompletar onSeleccionar={handleAgregarFiltro} />
             {!cliente && (
               <p className="text-xs text-amber-600 mt-2">
-                💡 Seleccioná un cliente primero para autocompletar precios.
+                Seleccioná un cliente primero para autocompletar precios.
               </p>
             )}
           </div>

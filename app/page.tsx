@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, Suspense } from 'react';
-import { usePathname, useSearchParams } from 'next/navigation';
+import { usePathname, useSearchParams, useRouter } from 'next/navigation';
 import { supabase } from '../lib/supabase';
 import type { Filtro } from '../lib/types';
 import BuscadorVehiculo from './components/BuscadorVehiculo';
@@ -12,30 +12,26 @@ import ModalDetalle from './components/ModalDetalle';
 function CatalogoFHL() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const router = useRouter();
 
   // --- Estado del Modal (controlado por URL) ---
   const [filtroDetalle, setFiltroDetalle] = useState<Filtro | null>(null);
 
-  // Abrir modal: actualiza la URL con ?filtro=CODIGO
+  // Abrir modal: actualiza la URL con ?filtro=CODIGO (integrado con el router de Next.js)
   const abrirFiltro = useCallback((codigo: string) => {
     const params = new URLSearchParams(searchParams.toString());
     params.set('filtro', codigo);
-    window.history.pushState(null, '', `${pathname}?${params.toString()}`);
-  }, [pathname, searchParams]);
+    router.push(`${pathname}?${params.toString()}`, { scroll: false });
+  }, [pathname, searchParams, router]);
 
-  // Cerrar modal: limpia la URL
+  // Cerrar modal: limpia la URL sin agregar entrada al historial
   const cerrarModal = useCallback(() => {
     setFiltroDetalle(null);
     const params = new URLSearchParams(searchParams.toString());
     params.delete('filtro');
     const nuevaUrl = params.toString() ? `${pathname}?${params.toString()}` : pathname;
-    
-    // 1. Limpieza visual instantánea sin afectar el historial de navegación
-    window.history.replaceState(null, '', nuevaUrl);
-    
-    // 2. Forzamos al framework a leer la nueva URL despachando el evento nativo
-    window.dispatchEvent(new PopStateEvent('popstate'));
-  }, [pathname, searchParams]);
+    router.replace(nuevaUrl, { scroll: false });
+  }, [pathname, searchParams, router]);
 
   // Cargar filtro desde URL (única fuente de verdad: searchParams)
   useEffect(() => {

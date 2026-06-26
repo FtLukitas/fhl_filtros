@@ -68,6 +68,17 @@ function CatalogoFHL() {
     };
   }, [searchParams]);
 
+  // Limpiar ?filtro del historial al salir de la página (unmount).
+  // Si el usuario navega a otra sección con el modal abierto, esto evita
+  // que el Router Cache de Next.js guarde '/?filtro=XXX' como versión cacheada de '/'.
+  useEffect(() => {
+    return () => {
+      if (window.location.search.includes('filtro=')) {
+        window.history.replaceState(null, '', '/');
+      }
+    };
+  }, []);
+
   return (
     <main className="min-h-screen bg-gray-50 p-4 md:p-10 text-slate-800 relative">
       <div className="max-w-6xl mx-auto">

@@ -8,20 +8,11 @@ export default function Navbar() {
   const [isOpen, setIsOpen] = useState(false);
   const pathname = usePathname();
 
-  const links = [
-    { name: 'Inicio', href: '/' },
+  // Links secundarios (usan <Link> para SPA navigation)
+  const secondaryLinks = [
     { name: 'Quiénes Somos', href: '/quienes-somos' },
     { name: 'Contacto', href: '/contacto' },
   ];
-
-  // Limpiar el parámetro ?filtro al navegar a Inicio para evitar que el modal se reabra
-  const limpiarFiltroYNavegar = () => {
-    // Si estamos en la home con un modal abierto, limpiamos la URL
-    if (pathname === '/') {
-      window.history.replaceState(null, '', '/');
-      window.dispatchEvent(new PopStateEvent('popstate'));
-    }
-  };
 
   return (
     <nav className="bg-blue-900 border-b border-slate-200 sticky top-0 z-[110] shadow-sm">
@@ -29,14 +20,14 @@ export default function Navbar() {
         {/* ALTURA: h-20 en mobile, h-24 en desktop */}
         <div className="flex justify-between items-center h-20 md:h-24">
 
-          {/* LOGO */}
-          <Link href="/" onClick={limpiarFiltroYNavegar} className="flex items-center">
+          {/* LOGO — <a> fuerza navegación limpia, evita cache del router con ?filtro */}
+          <a href="/" className="flex items-center">
             <img
               src="/logo.png"
               alt="FHL Filtros Logo"
               className="h-15 md:h-16 w-auto object-contain hover:opacity-80 transition-opacity"
             />
-          </Link>
+          </a>
 
           {/* BOTON HAMBURGUESA (Solo se ve en mobile) */}
           <button
@@ -52,15 +43,24 @@ export default function Navbar() {
             </svg>
           </button>
 
-          {/* LINKS DESKTOP (Se ocultan en mobile) */}
+          {/* LINKS DESKTOP */}
           <div className="hidden md:flex gap-4">
-            {links.map((link) => {
+            {/* Inicio — <a> para navegación limpia */}
+            <a
+              href="/"
+              className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${pathname === '/'
+                ? 'bg-red-600 text-white shadow-red-200'
+                : 'text-white hover:text-blue-900 hover:bg-slate-50'
+                }`}
+            >
+              Inicio
+            </a>
+            {secondaryLinks.map((link) => {
               const isActive = pathname === link.href;
               return (
                 <Link
                   key={link.name}
                   href={link.href}
-                  onClick={link.href === '/' ? limpiarFiltroYNavegar : undefined}
                   className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${isActive
                     ? 'bg-red-600 text-white shadow-red-200'
                     : 'text-white hover:text-blue-900 hover:bg-slate-50'
@@ -76,16 +76,24 @@ export default function Navbar() {
         {/* MENÚ MÓVIL DESPLEGABLE */}
         <div className={`md:hidden overflow-hidden transition-all duration-300 ease-in-out ${isOpen ? 'max-h-64 pb-6' : 'max-h-0'}`}>
           <div className="flex flex-col gap-2">
-            {links.map((link) => {
+            {/* Inicio — <a> para navegación limpia */}
+            <a
+              href="/"
+              onClick={() => setIsOpen(false)}
+              className={`px-4 py-3 rounded-xl text-base font-bold ${pathname === '/'
+                ? 'bg-red-600 text-white'
+                : 'text-slate-600 bg-slate-50'
+                }`}
+            >
+              Inicio
+            </a>
+            {secondaryLinks.map((link) => {
               const isActive = pathname === link.href;
               return (
                 <Link
                   key={link.name}
                   href={link.href}
-                  onClick={() => {
-                    setIsOpen(false);
-                    if (link.href === '/') limpiarFiltroYNavegar();
-                  }}
+                  onClick={() => setIsOpen(false)}
                   className={`px-4 py-3 rounded-xl text-base font-bold ${isActive
                     ? 'bg-red-600 text-white'
                     : 'text-slate-600 bg-slate-50'

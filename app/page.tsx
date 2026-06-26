@@ -17,22 +17,18 @@ function CatalogoFHL() {
   // --- Estado del Modal (controlado por URL) ---
   const [filtroDetalle, setFiltroDetalle] = useState<Filtro | null>(null);
 
-  // Abrir modal: pushState actualiza la URL sincrónicamente + notifica al router
+  // Abrir modal usando router.push (según las reglas)
   const abrirFiltro = useCallback((codigo: string) => {
     const params = new URLSearchParams(searchParams.toString());
     params.set('filtro', codigo);
-    const nuevaUrl = `${pathname}?${params.toString()}`;
-    window.history.pushState(null, '', nuevaUrl);
-    // Notificar a Next.js del cambio para que useSearchParams se actualice
-    window.dispatchEvent(new PopStateEvent('popstate'));
-  }, [pathname, searchParams]);
+    router.push(`${pathname}?${params.toString()}`);
+  }, [pathname, searchParams, router]);
 
-  // Cerrar modal: replaceState limpia la URL sincrónicamente
+  // Cerrar modal: hace push a la ruta original sin parámetros usando el useRouter (según las reglas)
   const cerrarModal = useCallback(() => {
     setFiltroDetalle(null);
-    window.history.replaceState(null, '', pathname);
-    window.dispatchEvent(new PopStateEvent('popstate'));
-  }, [pathname]);
+    router.push(pathname);
+  }, [pathname, router]);
 
   // Cargar filtro desde URL (única fuente de verdad: searchParams)
   useEffect(() => {
@@ -68,17 +64,6 @@ function CatalogoFHL() {
       abortController.abort();
     };
   }, [searchParams]);
-
-  // Limpiar ?filtro del historial al salir de la página (unmount).
-  // Si el usuario navega a otra sección con el modal abierto, esto evita
-  // que el Router Cache de Next.js guarde '/?filtro=XXX' como versión cacheada de '/'.
-  useEffect(() => {
-    return () => {
-      if (window.location.search.includes('filtro=')) {
-        window.history.replaceState(null, '', '/');
-      }
-    };
-  }, []);
 
   return (
     <main className="min-h-screen bg-gray-50 p-4 md:p-10 text-slate-800 relative">

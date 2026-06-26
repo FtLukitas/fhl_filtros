@@ -21,13 +21,13 @@ export default function Navbar() {
         <div className="flex justify-between items-center h-20 md:h-24">
 
           {/* LOGO */}
-          <Link href="/" className="flex items-center">
+          <a href="/" className="flex items-center">
             <img
               src="/logo.png"
               alt="FHL Filtros Logo"
               className="h-15 md:h-16 w-auto object-contain hover:opacity-80 transition-opacity"
             />
-          </Link>
+          </a>
 
           {/* BOTON HAMBURGUESA (Solo se ve en mobile) */}
           <button
@@ -47,15 +47,21 @@ export default function Navbar() {
           <div className="hidden md:flex gap-4">
             {links.map((link) => {
               const isActive = pathname === link.href;
+              const className = `px-4 py-2 rounded-lg text-sm font-bold transition-all ${isActive
+                ? 'bg-red-600 text-white shadow-red-200'
+                : 'text-white hover:text-blue-900 hover:bg-slate-50'
+                }`;
+
+              if (link.href === '/') {
+                return (
+                  <a key={link.name} href="/" className={className}>
+                    {link.name}
+                  </a>
+                );
+              }
+
               return (
-                <Link
-                  key={link.name}
-                  href={link.href}
-                  className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${isActive
-                    ? 'bg-red-600 text-white shadow-red-200'
-                    : 'text-white hover:text-blue-900 hover:bg-slate-50'
-                    }`}
-                >
+                <Link key={link.name} href={link.href} className={className}>
                   {link.name}
                 </Link>
               );
@@ -68,15 +74,30 @@ export default function Navbar() {
           <div className="flex flex-col gap-2">
             {links.map((link) => {
               const isActive = pathname === link.href;
+              const className = `px-4 py-3 rounded-xl text-base font-bold ${isActive
+                ? 'bg-red-600 text-white'
+                : 'text-slate-600 bg-slate-50'
+                }`;
+
+              if (link.href === '/') {
+                return (
+                  <a
+                    key={link.name}
+                    href="/"
+                    onClick={() => setIsOpen(false)}
+                    className={className}
+                  >
+                    {link.name}
+                  </a>
+                );
+              }
+
               return (
                 <Link
                   key={link.name}
                   href={link.href}
                   onClick={() => setIsOpen(false)}
-                  className={`px-4 py-3 rounded-xl text-base font-bold ${isActive
-                    ? 'bg-red-600 text-white'
-                    : 'text-slate-600 bg-slate-50'
-                    }`}
+                  className={className}
                 >
                   {link.name}
                 </Link>

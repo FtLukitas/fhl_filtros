@@ -14,6 +14,15 @@ export default function Navbar() {
     { name: 'Contacto', href: '/contacto' },
   ];
 
+  // Limpiar el parámetro ?filtro al navegar a Inicio para evitar que el modal se reabra
+  const limpiarFiltroYNavegar = () => {
+    // Si estamos en la home con un modal abierto, limpiamos la URL
+    if (pathname === '/') {
+      window.history.replaceState(null, '', '/');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }
+  };
+
   return (
     <nav className="bg-blue-900 border-b border-slate-200 sticky top-0 z-[110] shadow-sm">
       <div className="max-w-6xl mx-auto px-4">
@@ -21,7 +30,7 @@ export default function Navbar() {
         <div className="flex justify-between items-center h-20 md:h-24">
 
           {/* LOGO */}
-          <Link href="/" className="flex items-center">
+          <Link href="/" onClick={limpiarFiltroYNavegar} className="flex items-center">
             <img
               src="/logo.png"
               alt="FHL Filtros Logo"
@@ -45,23 +54,15 @@ export default function Navbar() {
 
           {/* LINKS DESKTOP (Se ocultan en mobile) */}
           <div className="hidden md:flex gap-4">
-            <button
-              onClick={() => { window.location.href = '/'; }}
-              className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${pathname === '/'
-                ? 'bg-red-600 text-white shadow-red-200'
-                : 'text-white hover:text-blue-900 hover:bg-slate-50'
-                }`}
-            >
-              Inicio
-            </button>
-            {links.slice(1).map((link) => {
+            {links.map((link) => {
               const isActive = pathname === link.href;
               return (
                 <Link
                   key={link.name}
                   href={link.href}
+                  onClick={link.href === '/' ? limpiarFiltroYNavegar : undefined}
                   className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${isActive
-                    ? 'bg-red-600 text-white shadow-red-200' // Activo: Rojo con texto blanco
+                    ? 'bg-red-600 text-white shadow-red-200'
                     : 'text-white hover:text-blue-900 hover:bg-slate-50'
                     }`}
                 >
@@ -75,25 +76,16 @@ export default function Navbar() {
         {/* MENÚ MÓVIL DESPLEGABLE */}
         <div className={`md:hidden overflow-hidden transition-all duration-300 ease-in-out ${isOpen ? 'max-h-64 pb-6' : 'max-h-0'}`}>
           <div className="flex flex-col gap-2">
-            <button
-              onClick={() => {
-                window.location.href = '/';
-                setIsOpen(false);
-              }}
-              className={`px-4 py-3 rounded-xl text-base font-bold text-left ${pathname === '/'
-                ? 'bg-red-600 text-white'
-                : 'text-slate-600 bg-slate-50'
-                }`}
-            >
-              Inicio
-            </button>
-            {links.slice(1).map((link) => {
+            {links.map((link) => {
               const isActive = pathname === link.href;
               return (
                 <Link
                   key={link.name}
                   href={link.href}
-                  onClick={() => setIsOpen(false)} // Cierra el menú al clickear
+                  onClick={() => {
+                    setIsOpen(false);
+                    if (link.href === '/') limpiarFiltroYNavegar();
+                  }}
                   className={`px-4 py-3 rounded-xl text-base font-bold ${isActive
                     ? 'bg-red-600 text-white'
                     : 'text-slate-600 bg-slate-50'

@@ -1,3 +1,10 @@
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = {
+  title: 'Contacto | FHL Filtros',
+  description: 'Contactá a FHL Filtros por WhatsApp, teléfono o email. Ventas y administración de filtros de habitáculo.',
+};
+
 export default function Contacto() {
   return (
     <main className="min-h-screen bg-slate-50 flex flex-col items-center pt-12 md:pt-24 p-4">

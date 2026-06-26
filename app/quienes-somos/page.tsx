@@ -1,4 +1,9 @@
-'use client';
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = {
+  title: 'Quiénes Somos | FHL Filtros',
+  description: 'Conocé la trayectoria, misión y compromiso de FHL Filtros, especialistas en filtros de habitáculo para la industria automotriz.',
+};
 
 export default function QuienesSomos() {
   return (

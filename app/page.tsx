@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, Suspense } from 'react';
+import { useState, useEffect, useCallback, Suspense, useRef } from 'react';
 import { usePathname, useSearchParams, useRouter } from 'next/navigation';
 import { supabase } from '../lib/supabase';
 import type { Filtro } from '../lib/types';
@@ -17,21 +17,22 @@ function CatalogoFHL() {
   // --- Estado del Modal (controlado por URL) ---
   const [filtroDetalle, setFiltroDetalle] = useState<Filtro | null>(null);
 
-  // Abrir modal: actualiza la URL con ?filtro=CODIGO (integrado con el router de Next.js)
+  // Abrir modal: pushState actualiza la URL sincrónicamente + notifica al router
   const abrirFiltro = useCallback((codigo: string) => {
     const params = new URLSearchParams(searchParams.toString());
     params.set('filtro', codigo);
-    router.push(`${pathname}?${params.toString()}`, { scroll: false });
-  }, [pathname, searchParams, router]);
+    const nuevaUrl = `${pathname}?${params.toString()}`;
+    window.history.pushState(null, '', nuevaUrl);
+    // Notificar a Next.js del cambio para que useSearchParams se actualice
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  }, [pathname, searchParams]);
 
-  // Cerrar modal: limpia la URL sin agregar entrada al historial
+  // Cerrar modal: replaceState limpia la URL sincrónicamente
   const cerrarModal = useCallback(() => {
     setFiltroDetalle(null);
-    const params = new URLSearchParams(searchParams.toString());
-    params.delete('filtro');
-    const nuevaUrl = params.toString() ? `${pathname}?${params.toString()}` : pathname;
-    router.replace(nuevaUrl, { scroll: false });
-  }, [pathname, searchParams, router]);
+    window.history.replaceState(null, '', pathname);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  }, [pathname]);
 
   // Cargar filtro desde URL (única fuente de verdad: searchParams)
   useEffect(() => {

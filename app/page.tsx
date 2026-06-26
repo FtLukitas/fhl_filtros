@@ -150,6 +150,16 @@ function CatalogoFHL() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [filtroDetalle, cerrarModal]);
 
+  // Bloquear scroll de la página cuando el modal está abierto
+  useEffect(() => {
+    if (filtroDetalle) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => { document.body.style.overflow = ''; };
+  }, [filtroDetalle]);
+
   // ==========================================
   // LÓGICA DE BÚSQUEDA EXISTENTE
   // ==========================================
@@ -399,7 +409,7 @@ function CatalogoFHL() {
               </div>
             </div>
 
-            <div className="p-6 overflow-y-auto will-change-transform">
+            <div className={`p-6 will-change-transform ${zoomActivo ? 'overflow-hidden' : 'overflow-y-auto'}`}>
               <div className="mb-6">
                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Equivalencias OEM / Cruzadas</p>
                 <p className="text-slate-700 font-medium">{filtroDetalle.equivalencias || 'Sin equivalencias registradas.'}</p>

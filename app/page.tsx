@@ -373,7 +373,7 @@ function CatalogoFHL() {
 
       {/* MODAL (DETALLE DEL FILTRO) */}
       {filtroDetalle && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[900] flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={cerrarModal}>
+        <div className="fixed inset-0 bg-slate-900/70 z-[900] flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={cerrarModal}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95 relative" onClick={(e) => e.stopPropagation()}>
             
             <div className="bg-blue-900 p-6 flex justify-between items-center text-white">
@@ -399,7 +399,7 @@ function CatalogoFHL() {
               </div>
             </div>
 
-            <div className="p-6 overflow-y-auto">
+            <div className="p-6 overflow-y-auto will-change-transform">
               <div className="mb-6">
                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Equivalencias OEM / Cruzadas</p>
                 <p className="text-slate-700 font-medium">{filtroDetalle.equivalencias || 'Sin equivalencias registradas.'}</p>
@@ -419,7 +419,7 @@ function CatalogoFHL() {
                       <img
                         src={listaImagenes[indiceImagen]}
                         alt={`Filtro FHL ${filtroDetalle?.codigo_fhl || ''} - Vista ${indiceImagen + 1}`}
-                        className="w-full h-full object-contain mix-blend-multiply drop-shadow-md"
+                        className="w-full h-full object-contain"
                         loading="lazy"
                       />
                     </div>

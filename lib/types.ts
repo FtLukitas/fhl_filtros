@@ -16,3 +16,22 @@ export interface ResultadoVehiculo {
   año: string | null;
   filtro_asociado: string;
 }
+
+// --- Facturador ---
+
+export interface Cliente {
+  id: string;
+  nombre: string;
+  cuit: string | null;
+  direccion: string | null;
+  eliminado: boolean;
+  created_at: string;
+}
+
+export interface PrecioCliente {
+  id: number;
+  cliente_id: string;
+  codigo_fhl: string;
+  precio: number;
+  updated_at: string;
+}

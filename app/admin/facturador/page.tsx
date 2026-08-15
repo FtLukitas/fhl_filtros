@@ -110,20 +110,32 @@ export default function FacturadorPage() {
   }, []);
 
   // Agregar filtro a la tabla
-  const handleAgregarFiltro = useCallback((filtro: Filtro) => {
+  const handleAgregarFiltro = useCallback((filtro: Filtro | { codigo_fhl: string }) => {
+    const codigo = filtro.codigo_fhl.trim();
+    if (!codigo) return;
+
     // Evitar duplicados
-    const existe = items.find((i) => i.codigo_fhl === filtro.codigo_fhl);
+    const existe = items.find((i) => i.codigo_fhl.toUpperCase() === codigo.toUpperCase());
     if (existe) {
-      setMensaje({ tipo: 'error', texto: `${filtro.codigo_fhl} ya está en la lista.` });
+      setMensaje({ tipo: 'error', texto: `${codigo} ya está en la lista.` });
       setTimeout(() => setMensaje(null), 2500);
       return;
     }
 
-    const precioDesdeDB = preciosCliente.get(filtro.codigo_fhl);
+    // Buscar precio si existe para este código
+    let precioDesdeDB = preciosCliente.get(codigo);
+    if (precioDesdeDB === undefined) {
+      for (const [k, v] of preciosCliente.entries()) {
+        if (k.toUpperCase() === codigo.toUpperCase()) {
+          precioDesdeDB = v;
+          break;
+        }
+      }
+    }
 
     const nuevoItem: ItemFactura = {
-      id: `${filtro.codigo_fhl}-${Date.now()}`,
-      codigo_fhl: filtro.codigo_fhl,
+      id: `${codigo}-${Date.now()}`,
+      codigo_fhl: codigo,
       cantidad: 1,
       precioUnitario: precioDesdeDB ?? 0,
     };

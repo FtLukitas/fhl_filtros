@@ -46,6 +46,8 @@ function CatalogoFHL() {
           .from('Tabla A')
           .select('*')
           .eq('codigo_fhl', codigo)
+          .eq('activo', true)
+          .or('eliminado.is.null,eliminado.eq.false')
           .single();
 
         if (!abortController.signal.aborted && data) {

@@ -12,8 +12,7 @@ export default function QuienesSomos() {
         
         {/* Encabezado con la barra roja de acento */}
         <header className="mb-12 flex items-center gap-4">
-          {/* Barrita roja lateral */}
-          <div className="w-2 h-14 bg-red-600 rounded-full"></div>
+          <div className="w-2 h-14 bg-red-600 rounded-full" aria-hidden="true"></div>
           
           <div>
             <h1 className="text-4xl font-black text-blue-900 italic uppercase leading-none">
@@ -30,21 +29,21 @@ export default function QuienesSomos() {
             En <span className="font-bold text-blue-900">FHL Filtros</span>, nos especializamos en la fabricación de soluciones de filtrado de alta eficiencia para la industria automotriz.
           </p>
           
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 py-8">
-            <div className="bg-slate-50 p-8 rounded-3xl border border-slate-200 hover:border-red-200 transition-colors group">
-              <h3 className="font-bold text-blue-900 mb-3 text-xl group-hover:text-red-600 transition-colors">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 py-4">
+            <div className="bg-slate-50 p-8 rounded-lg border border-slate-200 hover:border-red-200 transition-colors group shadow-xs">
+              <h2 className="font-bold text-blue-900 mb-3 text-xl group-hover:text-red-600 transition-colors">
                 Misión
-              </h3>
-              <p className="text-sm text-slate-600">
+              </h2>
+              <p className="text-sm text-slate-600 leading-relaxed">
                 Garantizar la pureza del aire en el habitáculo, aplicando tecnología de precisión y estándares industriales en cada uno de nuestros procesos.
               </p>
             </div>
             
-            <div className="bg-slate-50 p-8 rounded-3xl border border-slate-200 hover:border-red-200 transition-colors group">
-              <h3 className="font-bold text-blue-900 mb-3 text-xl group-hover:text-red-600 transition-colors">
+            <div className="bg-slate-50 p-8 rounded-lg border border-slate-200 hover:border-red-200 transition-colors group shadow-xs">
+              <h2 className="font-bold text-blue-900 mb-3 text-xl group-hover:text-red-600 transition-colors">
                 Compromiso
-              </h3>
-              <p className="text-sm text-slate-600">
+              </h2>
+              <p className="text-sm text-slate-600 leading-relaxed">
                 Proveer productos confiables que aseguren el máximo rendimiento de los sistemas de climatización y la protección técnica de cada vehículo.
               </p>
             </div>

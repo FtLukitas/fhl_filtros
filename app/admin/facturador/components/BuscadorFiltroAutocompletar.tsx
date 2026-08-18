@@ -47,6 +47,7 @@ export default function BuscadorFiltroAutocompletar({ onSeleccionar }: BuscadorF
       const { data, error } = await supabase
         .from('Tabla A')
         .select('*')
+        .eq('eliminado', false)
         .or(`codigo_fhl.ilike.%${termino}%,buscador_unificado.ilike.%${termino}%`)
         .limit(8);
 
@@ -121,12 +122,18 @@ export default function BuscadorFiltroAutocompletar({ onSeleccionar }: BuscadorF
             strokeWidth="2"
             strokeLinecap="round"
             strokeLinejoin="round"
+            aria-hidden="true"
           >
             <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
           <input
             ref={inputRef}
             type="text"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded={abierto}
+            aria-haspopup="listbox"
+            aria-label="Buscar código de filtro en catálogo o escribir uno nuevo"
             value={texto}
             onChange={(e) => setTexto(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -136,21 +143,21 @@ export default function BuscadorFiltroAutocompletar({ onSeleccionar }: BuscadorF
               }
             }}
             placeholder="Buscar código (ej: FHL-001) o escribir nuevo..."
-            className="w-full border border-slate-300 rounded pl-9 pr-16 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+            className="w-full border border-slate-300 rounded-md pl-9 pr-16 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-blue-600 transition-colors"
           />
           <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
             {cargando && (
-              <div className="h-4 w-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+              <div className="h-4 w-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" aria-hidden="true" />
             )}
             <button
               type="button"
               onClick={handleAgregarManual}
               disabled={!texto.trim()}
               title={texto.trim() ? `Agregar "${texto.trim()}" al presupuesto` : 'Escribí un código para agregar'}
-              aria-label="Agregar filtro"
-              className="p-1 rounded bg-blue-900 hover:bg-blue-800 text-white disabled:opacity-40 disabled:hover:bg-blue-900 disabled:cursor-not-allowed transition-all flex items-center justify-center shadow-sm active:scale-95"
+              aria-label={texto.trim() ? `Agregar código ${texto.trim()} al presupuesto` : 'Agregar ítem manual'}
+              className="p-1 rounded-md bg-blue-900 hover:bg-blue-800 text-white disabled:opacity-40 disabled:hover:bg-blue-900 disabled:cursor-not-allowed transition-all flex items-center justify-center shadow-xs active:scale-95 cursor-pointer"
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <line x1="12" y1="5" x2="12" y2="19" />
                 <line x1="5" y1="12" x2="19" y2="12" />
               </svg>
@@ -161,14 +168,16 @@ export default function BuscadorFiltroAutocompletar({ onSeleccionar }: BuscadorF
 
       {/* Dropdown de sugerencias */}
       {abierto && sugerencias.length > 0 && (
-        <div className="absolute z-50 mt-1 w-full bg-white border border-slate-200 rounded shadow-lg max-h-64 overflow-y-auto">
+        <div role="listbox" aria-label="Sugerencias de filtros" className="absolute z-50 mt-1 w-full bg-white border border-slate-200 rounded-md shadow-lg max-h-64 overflow-y-auto">
           {sugerencias.map((filtro, idx) => (
             <button
               key={filtro.id}
+              role="option"
+              aria-selected={idx === indiceActivo}
               onClick={() => seleccionar(filtro)}
-              className={`w-full text-left px-3 py-2.5 text-sm transition-colors border-b border-slate-100 last:border-b-0 ${
+              className={`w-full text-left px-3 py-2.5 text-sm transition-colors border-b border-slate-100 last:border-b-0 cursor-pointer ${
                 idx === indiceActivo
-                  ? 'bg-blue-50 text-blue-900'
+                  ? 'bg-blue-50 text-blue-900 font-bold'
                   : 'hover:bg-slate-50 text-slate-700'
               }`}
             >
@@ -186,16 +195,16 @@ export default function BuscadorFiltroAutocompletar({ onSeleccionar }: BuscadorF
 
       {/* Dropdown sin resultados pero con opción de agregar */}
       {abierto && sugerencias.length === 0 && texto.trim().length >= 2 && !cargando && (
-        <div className="absolute z-50 mt-1 w-full bg-white border border-slate-200 rounded shadow-lg p-3 text-center">
+        <div className="absolute z-50 mt-1 w-full bg-white border border-slate-200 rounded-md shadow-lg p-3 text-center">
           <p className="text-xs text-slate-500 mb-2">
             No se encontró <span className="font-bold text-slate-800 font-mono">"{texto.trim()}"</span> en el catálogo.
           </p>
           <button
             type="button"
             onClick={handleAgregarManual}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-900 hover:bg-blue-800 rounded transition-colors"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-900 hover:bg-blue-800 rounded-md transition-colors cursor-pointer"
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
               <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
             </svg>
             Agregar como nuevo filtro

@@ -15,9 +15,11 @@ interface FormData {
   nombre: string;
   cuit: string;
   direccion: string;
+  telefono: string;
+  email: string;
 }
 
-const formVacio: FormData = { nombre: '', cuit: '', direccion: '' };
+const formVacio: FormData = { nombre: '', cuit: '', direccion: '', telefono: '', email: '' };
 
 export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: SelectorClienteProps) {
   const [clientes, setClientes] = useState<Cliente[]>([]);
@@ -82,6 +84,8 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
       nombre: clienteSeleccionado.nombre,
       cuit: clienteSeleccionado.cuit || '',
       direccion: clienteSeleccionado.direccion || '',
+      telefono: clienteSeleccionado.telefono || '',
+      email: clienteSeleccionado.email || '',
     });
     setEditandoId(clienteSeleccionado.id);
     setVista('formulario');
@@ -111,6 +115,8 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
             nombre: formData.nombre.trim(),
             cuit: formData.cuit.trim() || null,
             direccion: formData.direccion.trim() || null,
+            telefono: formData.telefono.trim() || null,
+            email: formData.email.trim() || null,
           })
           .eq('id', editandoId);
 
@@ -122,6 +128,8 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
             nombre: formData.nombre.trim(),
             cuit: formData.cuit.trim() || null,
             direccion: formData.direccion.trim() || null,
+            telefono: formData.telefono.trim() || null,
+            email: formData.email.trim() || null,
           });
         }
       } else {
@@ -131,6 +139,8 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
             nombre: formData.nombre.trim(),
             cuit: formData.cuit.trim() || null,
             direccion: formData.direccion.trim() || null,
+            telefono: formData.telefono.trim() || null,
+            email: formData.email.trim() || null,
           })
           .select()
           .single();
@@ -238,6 +248,7 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
                 onSeleccionar(c);
                 setConfirmarEliminar(false);
               }}
+              aria-label="Seleccionar cliente registrado"
               className="flex-1 border border-slate-300 rounded px-3 py-2.5 text-sm text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               disabled={cargando}
             >
@@ -327,10 +338,11 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
           </p>
           <div className="space-y-3">
             <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">
+              <label htmlFor="facturador-cliente-nombre" className="block text-xs font-semibold text-slate-600 mb-1">
                 Nombre / Razón Social *
               </label>
               <input
+                id="facturador-cliente-nombre"
                 ref={inputRef}
                 type="text"
                 value={formData.nombre}
@@ -341,10 +353,11 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">
+                <label htmlFor="facturador-cliente-cuit" className="block text-xs font-semibold text-slate-600 mb-1">
                   CUIT / CUIL
                 </label>
                 <input
+                  id="facturador-cliente-cuit"
                   type="text"
                   value={formData.cuit}
                   onChange={(e) => setFormData({ ...formData, cuit: e.target.value })}
@@ -353,14 +366,43 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">
+                <label htmlFor="facturador-cliente-dir" className="block text-xs font-semibold text-slate-600 mb-1">
                   Dirección
                 </label>
                 <input
+                  id="facturador-cliente-dir"
                   type="text"
                   value={formData.direccion}
                   onChange={(e) => setFormData({ ...formData, direccion: e.target.value })}
                   placeholder="Ej: Av. Rivadavia 1234, CABA"
+                  className={inputClase}
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label htmlFor="facturador-cliente-tel" className="block text-xs font-semibold text-slate-600 mb-1">
+                  Teléfono / WhatsApp
+                </label>
+                <input
+                  id="facturador-cliente-tel"
+                  type="text"
+                  value={formData.telefono}
+                  onChange={(e) => setFormData({ ...formData, telefono: e.target.value })}
+                  placeholder="Ej: 11 2345-6789"
+                  className={inputClase}
+                />
+              </div>
+              <div>
+                <label htmlFor="facturador-cliente-email" className="block text-xs font-semibold text-slate-600 mb-1">
+                  Email
+                </label>
+                <input
+                  id="facturador-cliente-email"
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  placeholder="Ej: contacto@empresa.com"
                   className={inputClase}
                 />
               </div>

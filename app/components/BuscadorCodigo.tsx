@@ -29,7 +29,6 @@ export default function BuscadorCodigo({ onVerDetalle }: BuscadorCodigoProps) {
 
   // Debounce de 350ms
   useEffect(() => {
-    // Evitar el debounce en el primer render (valor vacío)
     if (primerRender.current) {
       primerRender.current = false;
       return;
@@ -55,7 +54,9 @@ export default function BuscadorCodigo({ onVerDetalle }: BuscadorCodigoProps) {
       const { data, error: err } = await supabase
         .from('Tabla A')
         .select('*')
-        .ilike('buscador_unificado', `%${terminoLimpio}%`);
+        .ilike('buscador_unificado', `%${terminoLimpio}%`)
+        .eq('activo', true)
+        .or('eliminado.is.null,eliminado.eq.false');
     
       if (err) {
         setError('Error al buscar filtros. Intentá de nuevo.');
@@ -71,55 +72,94 @@ export default function BuscadorCodigo({ onVerDetalle }: BuscadorCodigoProps) {
 
   // Mostrar spinner inmediatamente al tipear (antes del debounce)
   const mostrarCargando = cargandoTexto || (busqueda !== busquedaDebounced && normalizarBusqueda(busqueda).length >= 2);
+  const sinResultados = !mostrarCargando && busquedaDebounced.trim().length >= 2 && filtrosTexto.length === 0;
 
   return (
-    <section>
+    <section aria-labelledby="heading-buscador-codigo">
       <div className="flex items-center gap-4 mb-6">
-        <h2 className="text-lg font-bold whitespace-nowrap">O BUSCAR POR CÓDIGO/EQUIVALENCIA</h2>
-        <div className="h-[1px] bg-slate-200 w-full"></div>
+        <h2 id="heading-buscador-codigo" className="text-lg font-bold whitespace-nowrap text-slate-800">
+          O BUSCAR POR CÓDIGO/EQUIVALENCIA
+        </h2>
+        <div className="h-[1px] bg-slate-200 w-full" aria-hidden="true"></div>
       </div>
 
-      <input
-        type="text"
-        placeholder="Escribí código FHL o equivalencia (ej: AKX-1014)..."
-        className="w-full p-4 rounded-xl border-2 border-slate-200 focus:border-blue-500 focus:ring-4 focus:ring-blue-100 outline-none transition-all mb-8"
-        value={busqueda}
-        onChange={(e) => setBusqueda(e.target.value)}
-      />
+      <div className="relative mb-8">
+        <label htmlFor="input-buscador-codigo" className="sr-only">
+          Buscar por código FHL o equivalencia
+        </label>
+        <input
+          id="input-buscador-codigo"
+          type="search"
+          placeholder="Escribí código FHL o equivalencia (ej: AKX-1014, FHL-001)..."
+          className="w-full p-4 rounded-lg border-2 border-slate-200 focus:border-blue-900 focus:ring-4 focus:ring-blue-100 outline-none transition-all text-slate-900 placeholder:text-slate-400 font-medium"
+          value={busqueda}
+          onChange={(e) => setBusqueda(e.target.value)}
+          aria-label="Buscar filtro por código FHL o equivalencia cruzada"
+        />
+      </div>
 
       {/* MENSAJE DE ERROR */}
       {error && (
-        <div className="mb-6 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm font-medium">
+        <div role="alert" aria-live="assertive" className="mb-6 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm font-medium">
           {error}
         </div>
       )}
 
       {/* SPINNER DE CARGA */}
       {mostrarCargando && (
-        <div className="flex items-center justify-center gap-3 mb-8 text-slate-400">
-          <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none">
+        <div role="status" aria-live="polite" className="flex items-center justify-center gap-3 mb-8 text-slate-500">
+          <svg className="animate-spin h-5 w-5 text-blue-900" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
           </svg>
-          <span className="text-sm font-medium">Buscando filtros...</span>
+          <span className="text-sm font-semibold">Buscando filtros en el catálogo...</span>
+        </div>
+      )}
+
+      {/* EMPTY STATE */}
+      {sinResultados && (
+        <div className="bg-white rounded-lg p-8 text-center border border-slate-200 mb-8 shadow-xs">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mx-auto text-slate-400 mb-2">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <p className="text-sm font-bold text-slate-700">
+            No se encontraron filtros para <span className="text-blue-900 font-mono">"{busquedaDebounced.trim()}"</span>
+          </p>
+          <p className="text-xs text-slate-400 mt-1">
+            Verificá el código o equivalencia ingresada o probá buscando por marca y modelo de vehículo arriba.
+          </p>
         </div>
       )}
 
       {/* RESULTADOS */}
-      {!mostrarCargando && (
+      {!mostrarCargando && filtrosTexto.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {filtrosTexto.map((f) => (
             <div 
               key={f.id} 
+              role="button"
+              tabIndex={0}
               onClick={() => onVerDetalle(f.codigo_fhl)}
-              className="bg-white p-5 rounded-xl border border-slate-200 hover:shadow-lg hover:border-blue-400 transition-all cursor-pointer transform hover:-translate-y-1 flex flex-col h-full group"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onVerDetalle(f.codigo_fhl);
+                }
+              }}
+              aria-label={`Ver ficha técnica y medidas del filtro ${f.codigo_fhl}`}
+              className="bg-white p-5 rounded-lg border border-slate-200 hover:shadow-lg hover:border-blue-500 transition-all cursor-pointer transform hover:-translate-y-0.5 flex flex-col h-full group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
             >
               <div className="flex justify-between items-start mb-2">
-                <span className="text-blue-900 font-bold text-lg group-hover:text-red-500">{f.codigo_fhl}</span>
-                <span className="text-[10px] bg-blue-50 text-blue-500 px-2 py-1 rounded font-bold uppercase transition-colors group-hover:bg-blue-900 group-hover:text-white">Ver Detalle</span>
+                <span className="text-blue-900 font-black text-lg group-hover:text-red-600 transition-colors">
+                  {f.codigo_fhl}
+                </span>
+                <span className="text-[10px] bg-blue-50 text-blue-900 px-2 py-1 rounded font-bold uppercase transition-colors group-hover:bg-blue-900 group-hover:text-white border border-blue-100">
+                  Ver Ficha
+                </span>
               </div>
               
-              <p className="text-xs text-slate-400 uppercase font-semibold">Equivalencias</p>
+              <p className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Equivalencias</p>
               <p className="text-sm text-slate-600 mb-4 line-clamp-2">{f.equivalencias || 'N/A'}</p>
   
               <div className="mt-auto border-t border-slate-100 pt-3">

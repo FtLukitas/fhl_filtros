@@ -255,15 +255,14 @@ function FacturadorContenido() {
         })
       );
 
-      const detalleTipo = nuevaLista.tipo_ajuste === 'excel' || nuevaLista.tipo_ajuste === 'fijo'
-        ? `(${nuevoMap.size} precios fijados)`
-        : nuevaLista.porcentaje !== 0
-        ? `(${nuevaLista.porcentaje > 0 ? `+${nuevaLista.porcentaje}%` : `${nuevaLista.porcentaje}%`})`
-        : '(Precio Base)';
+      const detalleTipo =
+        nuevaLista.tipo_ajuste === 'porcentaje' && Number(nuevaLista.porcentaje) !== 0
+          ? ` (${Number(nuevaLista.porcentaje) > 0 ? `+${nuevaLista.porcentaje}%` : `${nuevaLista.porcentaje}%`})`
+          : '';
 
       setMensaje({
         tipo: 'ok',
-        texto: `Se aplicó la ${nuevaLista.nombre} ${detalleTipo}. Precios actualizados.`,
+        texto: `Se aplicó la lista ${nuevaLista.nombre}${detalleTipo}. Precios actualizados.`,
       });
       setTimeout(() => setMensaje(null), 3000);
     },

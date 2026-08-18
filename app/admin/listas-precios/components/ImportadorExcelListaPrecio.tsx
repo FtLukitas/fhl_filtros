@@ -180,21 +180,20 @@ export default function ImportadorExcelListaPrecio({
       // Obtener todos los filtros de Tabla A para que la plantilla esté precargada
       const { data: filtros } = await supabase
         .from('Tabla A')
-        .select('codigo_fhl, descripcion_aplicacion, precio')
+        .select('codigo_fhl, precio')
         .eq('eliminado', false)
         .order('codigo_fhl', { ascending: true });
 
       const rows = (filtros || []).map((f) => ({
-        'CODIGO FHL': f.codigo_fhl || '',
-        'DESCRIPCION': f.descripcion_aplicacion || '',
-        'PRECIO BASE CATALOGO': f.precio || 0,
-        'PRECIO LISTA': f.precio ? Math.round(f.precio * (1 + Number(lista.porcentaje || 0) / 100)) : 0,
+        'Filtro': f.codigo_fhl || '',
+        'Precio': f.precio ? Number(f.precio) : 0,
       }));
 
       const ws = XLSX.utils.json_to_sheet(rows);
+      ws['!cols'] = [{ wch: 18 }, { wch: 16 }];
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Lista de Precios');
-      XLSX.writeFile(wb, `plantilla_precios_${lista.nombre.toLowerCase().replace(/[^a-z0-9]/g, '_')}.xlsx`);
+      XLSX.writeFile(wb, `plantilla_${lista.nombre.toLowerCase().replace(/[^a-z0-9]/g, '_')}.xlsx`);
     } catch (err) {
       console.error('Error al generar plantilla:', err);
     }

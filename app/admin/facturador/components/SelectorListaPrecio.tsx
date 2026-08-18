@@ -38,22 +38,22 @@ export default function SelectorListaPrecio({
         {listaSeleccionada && (
           <span
             className={`text-[11px] font-bold px-2 py-0.5 rounded ${
-              listaSeleccionada.tipo_ajuste === 'excel' || listaSeleccionada.tipo_ajuste === 'fijo'
-                ? 'bg-emerald-100 text-emerald-800'
-                : listaSeleccionada.porcentaje < 0
-                ? 'bg-green-100 text-green-800'
-                : listaSeleccionada.porcentaje > 0
-                ? 'bg-amber-100 text-amber-800'
+              listaSeleccionada.tipo_ajuste === 'porcentaje' && Number(listaSeleccionada.porcentaje) < 0
+                ? 'bg-green-100 text-green-800 border border-green-200'
+                : listaSeleccionada.tipo_ajuste === 'porcentaje' && Number(listaSeleccionada.porcentaje) > 0
+                ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                : listaSeleccionada.es_predeterminada
+                ? 'bg-blue-100 text-blue-900 border border-blue-200'
                 : 'bg-slate-100 text-slate-700'
             }`}
           >
-            {listaSeleccionada.tipo_ajuste === 'excel' || listaSeleccionada.tipo_ajuste === 'fijo'
-              ? 'Precios Específicos'
-              : listaSeleccionada.porcentaje === 0
-              ? 'Precio Base Catálogo (0%)'
-              : listaSeleccionada.porcentaje < 0
-              ? `${Math.abs(listaSeleccionada.porcentaje)}% Descuento`
-              : `+${listaSeleccionada.porcentaje}% Recargo`}
+            {listaSeleccionada.tipo_ajuste === 'porcentaje' && Number(listaSeleccionada.porcentaje) !== 0
+              ? Number(listaSeleccionada.porcentaje) > 0
+                ? `+${listaSeleccionada.porcentaje}% Recargo`
+                : `${Math.abs(listaSeleccionada.porcentaje)}% Descuento`
+              : listaSeleccionada.es_predeterminada
+              ? 'Lista Predeterminada'
+              : 'Lista Activa'}
           </span>
         )}
       </div>
@@ -72,11 +72,19 @@ export default function SelectorListaPrecio({
           disabled={cargando || listas.length === 0}
           className="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-md text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-900 focus:bg-white transition-all cursor-pointer disabled:opacity-50"
         >
-          {listas.map((l) => (
-            <option key={l.id} value={l.id}>
-              {l.nombre} {l.tipo_ajuste === 'excel' || l.tipo_ajuste === 'fijo' ? '(Precios Específicos)' : l.porcentaje !== 0 ? `(${l.porcentaje > 0 ? `+${l.porcentaje}%` : `${l.porcentaje}%`})` : '(Base)'} {l.es_predeterminada ? '(Predeterminada)' : ''}
-            </option>
-          ))}
+          {listas.map((l) => {
+            const porcentajeTxt =
+              l.tipo_ajuste === 'porcentaje' && Number(l.porcentaje) !== 0
+                ? ` (${Number(l.porcentaje) > 0 ? `+${l.porcentaje}%` : `${l.porcentaje}%`})`
+                : '';
+            const predTxt = l.es_predeterminada ? ' — Predeterminada' : '';
+
+            return (
+              <option key={l.id} value={l.id}>
+                {l.nombre}{porcentajeTxt}{predTxt}
+              </option>
+            );
+          })}
         </select>
       </div>
 

@@ -1,5 +1,5 @@
 const PROJECT_REF = 'egcydrmevdadqbuaqndr';
-const ACCESS_TOKEN = 'sbp_705c67d3e4a81d232d2c3406d5e0d63568d10747';
+const ACCESS_TOKEN = process.env.SUPABASE_ACCESS_TOKEN || '';
 
 const sql = `
 -- Añadir soporte para listas vinculadas a costeo

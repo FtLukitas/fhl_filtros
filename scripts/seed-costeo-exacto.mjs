@@ -1,7 +1,7 @@
 import XLSX from 'xlsx';
 
 const PROJECT_REF = 'egcydrmevdadqbuaqndr';
-const ACCESS_TOKEN = 'sbp_705c67d3e4a81d232d2c3406d5e0d63568d10747';
+const ACCESS_TOKEN = process.env.SUPABASE_ACCESS_TOKEN || '';
 
 async function seedExacto() {
   console.log('Parseando "Lista base Oct25.xlsx" con 100% de exactitud en todos los componentes...');

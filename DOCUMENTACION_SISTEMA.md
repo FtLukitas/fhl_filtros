@@ -309,16 +309,16 @@ erDiagram
 
 ```env
 # Supabase Backend
-NEXT_PUBLIC_SUPABASE_URL=https://egcydrmevdadqbuaqndr.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+NEXT_PUBLIC_SUPABASE_URL=https://tu-proyecto.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=tu_clave_anonima_publica_aqui
 
 # Credenciales de Administrador
 ADMIN_USER=admin
-ADMIN_PASSWORD=admin
-ADMIN_SECRET=fhl_secret_session_key_2026_secure
+ADMIN_PASSWORD=tu_contraseña_segura
+ADMIN_SECRET=tu_clave_secreta_de_sesion_segura
 
 # Inteligencia Artificial (OpenRouter)
-OPENROUTER_API_KEY=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
+OPENROUTER_API_KEY=tu_clave_de_openrouter_aqui
 ```
 
 ---

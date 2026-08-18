@@ -2,10 +2,8 @@ import XLSX from 'xlsx';
 import { createClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = 'https://egcydrmevdadqbuaqndr.supabase.co';
-const SUPABASE_SERVICE_ROLE_KEY = 'sbp_705c67d3e4a81d232d2c3406d5e0d63568d10747'; // Access token or we can use REST with Management API query
-
-const PROJECT_REF = 'egcydrmevdadqbuaqndr';
-const ACCESS_TOKEN = 'sbp_705c67d3e4a81d232d2c3406d5e0d63568d10747';
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_ACCESS_TOKEN || '';
+const ACCESS_TOKEN = process.env.SUPABASE_ACCESS_TOKEN || '';
 
 async function seedCosteoFromExcel() {
   console.log('Leyendo "Lista base Oct25.xlsx"...');

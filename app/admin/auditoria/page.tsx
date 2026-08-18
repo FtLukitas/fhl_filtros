@@ -208,55 +208,25 @@ DIRECTIVAS DE MÁXIMA PRECISIÓN Y EXACTITUD (Temperatura configurada: ${tempera
 4. SINTAXIS Y FORMATO: Usá Markdown enriquecido: negritas **...**, listas ordenadas o viñetas, código \`...\` y secciones con encabezados ###.
 5. Respuestas en español neutro rioplatense, sumamente analíticas, claras, ejecutivas y precisas.`;
 
-      const modelosChat = [
-        'nvidia/nemotron-3-nano-30b-a3b:free',
-        'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
-        'openrouter/free'
-      ];
+      // Llamar al endpoint del servidor que custodia la clave OPENROUTER_API_KEY de forma 100% segura
+      const res = await fetch('/api/admin/auditoria-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemPrompt,
+          contextoCatalogo,
+          historial: historialOpenRouter,
+          temperatura,
+        }),
+      });
 
       let textoRespuesta = '';
 
-      for (const mod of modelosChat) {
-        try {
-          const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-            method: 'POST',
-            signal: AbortSignal.timeout(9000),
-            headers: {
-              Authorization: `Bearer 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`,
-              'Content-Type': 'application/json',
-              'HTTP-Referer': 'https://fhlfiltros.com.ar',
-              'X-Title': 'FHL Filtros Auditor IA Chat',
-            },
-            body: JSON.stringify({
-              model: mod,
-              messages: [
-                {
-                  role: 'system',
-                  content: `${systemPrompt}\n\nBASE DE DATOS COMPLETA DE FHL FILTROS:\n${JSON.stringify(contextoCatalogo, null, 2)}`,
-                },
-                ...historialOpenRouter,
-              ],
-              temperature: Math.max(0.0, Math.min(1.0, temperatura)),
-              top_p: 0.1,
-              max_tokens: 2500,
-            }),
-          });
-
-          if (res.ok) {
-            const data = await res.json();
-            const content = data.choices?.[0]?.message?.content?.trim();
-            if (content) {
-              textoRespuesta = content;
-              break;
-            }
-          }
-        } catch (e) {
-          console.warn(`Fallback al siguiente modelo tras timeout/error en ${mod}:`, e);
-        }
-      }
-
-      if (!textoRespuesta) {
-        textoRespuesta = 'No se pudo conectar con el proveedor de IA en este momento. Por favor intentá nuevamente.';
+      if (res.ok) {
+        const json = await res.json();
+        textoRespuesta = json.respuesta || 'No se pudo obtener respuesta del motor de IA.';
+      } else {
+        textoRespuesta = 'Hubo una demora de conexión con el proveedor de IA. Por favor volvé a enviar tu consulta.';
       }
 
       setMensajes((prev) => [

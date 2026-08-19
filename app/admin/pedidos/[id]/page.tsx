@@ -360,6 +360,21 @@ export default function PedidoDetallePage({ params }: PageProps) {
 
           {/* Acciones del Pedido */}
           <div className="flex items-center gap-2 flex-wrap">
+            {/* Botón Editar Pedido */}
+            {!pedido.eliminado && pedido.estado !== 'cancelado' && (
+              <Link
+                href={`/admin/facturador?pedidoId=${pedido.id}`}
+                className="bg-amber-500 hover:bg-amber-600 active:scale-[0.98] text-white px-3.5 py-2 rounded-md text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+                title="Modificar cliente, filtros o cantidades de este pedido"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                </svg>
+                <span>Editar Pedido</span>
+              </Link>
+            )}
+
             {/* Botón Descargar PDF */}
             <button
               onClick={handleDescargarPDF}

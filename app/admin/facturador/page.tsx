@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { supabase } from '../../../lib/supabase';
 import { generarPDF, obtenerPDFBlobUrl } from '../../../lib/generarPDF';
 import type {
@@ -10,15 +11,30 @@ import type {
   Filtro,
   ListaPrecio,
   ItemListaPrecio,
+  Pedido,
 } from '../../../lib/types';
 import SelectorCliente from './components/SelectorCliente';
 import SelectorListaPrecio from './components/SelectorListaPrecio';
 import BuscadorFiltroAutocompletar from './components/BuscadorFiltroAutocompletar';
 import TablaItems, { type ItemFactura } from './components/TablaItems';
 
+interface BorradorLocal {
+  cliente: Cliente | null;
+  items: ItemFactura[];
+  observaciones: string;
+  numeroPresupuesto: string;
+  validezDias: number;
+  listaSeleccionadaId?: string | null;
+  usarPreciosCliente: boolean;
+  guardadoAt: string;
+}
+
 function FacturadorContenido() {
   const searchParams = useSearchParams();
   const router = useRouter();
+
+  const pedidoIdAEditar = searchParams.get('pedidoId') || searchParams.get('editar');
+  const modoEdicion = Boolean(pedidoIdAEditar);
 
   // --- Estado principal ---
   const [cliente, setCliente] = useState<Cliente | null>(null);
@@ -38,7 +54,17 @@ function FacturadorContenido() {
   const [validezDias, setValidezDias] = useState<number>(30);
   const [generando, setGenerando] = useState(false);
   const [guardandoPedido, setGuardandoPedido] = useState(false);
+  const [cargandoEdicion, setCargandoEdicion] = useState(modoEdicion);
   const [mensaje, setMensaje] = useState<{ tipo: 'ok' | 'error'; texto: string } | null>(null);
+
+  // --- Sistema de Autoguardado & Borrador ---
+  const storageKey = modoEdicion
+    ? `fhl_borrador_edicion_${pedidoIdAEditar}`
+    : 'fhl_borrador_nuevo_pedido';
+
+  const [ultimoGuardadoBorrador, setUltimoGuardadoBorrador] = useState<string | null>(null);
+  const [borradorPendiente, setBorradorPendiente] = useState<BorradorLocal | null>(null);
+  const [inicializado, setInicializado] = useState(false);
 
   // --- Vista previa ---
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -269,30 +295,183 @@ function FacturadorContenido() {
     [usarPreciosCliente, preciosCliente, preciosBaseFiltros]
   );
 
-  // Cargar cliente desde query param si viene
+  // --- Carga inicial: Modo Edición vs Carga Normal / Detección de Borrador ---
   useEffect(() => {
-    const cid = searchParams.get('clienteId');
-    if (cid && !cliente) {
-      supabase
-        .from('clientes')
-        .select('*')
-        .eq('id', cid)
-        .single()
-        .then(({ data }) => {
-          if (data) {
-            const cl = data as Cliente;
-            setCliente(cl);
-            cargarPrecios(cl.id);
+    let activo = true;
 
-            // Si el cliente tiene lista asignada, seleccionarla y cargar sus items
-            if (cl.lista_precio_id && listasPrecios.length > 0) {
-              const asignada = listasPrecios.find((l) => l.id === cl.lista_precio_id);
-              if (asignada) handleCambiarListaPrecio(asignada);
+    async function inicializar() {
+      // Caso 1: Modo Edición de un Pedido existente
+      if (pedidoIdAEditar) {
+        setCargandoEdicion(true);
+        try {
+          const { data: pedData, error: errPed } = await supabase
+            .from('pedidos')
+            .select('*, cliente:clientes(*), items:items_pedido(*)')
+            .eq('id', pedidoIdAEditar)
+            .single();
+
+          if (errPed || !pedData) {
+            console.error('Error al cargar pedido para edición:', errPed);
+            setMensaje({ tipo: 'error', texto: 'No se pudo cargar el pedido solicitado.' });
+            return;
+          }
+
+          if (activo) {
+            if (pedData.cliente) {
+              setCliente(pedData.cliente as Cliente);
+              cargarPrecios(pedData.cliente.id);
+            }
+            setObservaciones(pedData.observaciones || '');
+            setNumeroPresupuesto(`PED-${pedData.id.slice(0, 8).toUpperCase()}`);
+
+            if (pedData.items && pedData.items.length > 0) {
+              setItems(
+                pedData.items.map((it: any, idx: number) => ({
+                  id: `db-${it.id || idx}`,
+                  codigo_fhl: it.codigo_fhl,
+                  cantidad: Number(it.cantidad || 1),
+                  precioUnitario: Number(it.precio_unitario || 0),
+                }))
+              );
             }
           }
-        });
+        } catch (e) {
+          console.error(e);
+        } finally {
+          if (activo) {
+            setCargandoEdicion(false);
+            setInicializado(true);
+          }
+        }
+        return;
+      }
+
+      // Caso 2: Carga desde query param clienteId
+      const cid = searchParams.get('clienteId');
+      if (cid && !cliente) {
+        supabase
+          .from('clientes')
+          .select('*')
+          .eq('id', cid)
+          .single()
+          .then(({ data }) => {
+            if (data && activo) {
+              const cl = data as Cliente;
+              setCliente(cl);
+              cargarPrecios(cl.id);
+
+              if (cl.lista_precio_id && listasPrecios.length > 0) {
+                const asignada = listasPrecios.find((l) => l.id === cl.lista_precio_id);
+                if (asignada) handleCambiarListaPrecio(asignada);
+              }
+            }
+          });
+      } else {
+        // Caso 3: Verificar si hay un borrador previo guardado en localStorage
+        try {
+          const rawDraft = localStorage.getItem('fhl_borrador_nuevo_pedido');
+          if (rawDraft) {
+            const parsed = JSON.parse(rawDraft) as BorradorLocal;
+            if (parsed && (parsed.items?.length > 0 || parsed.cliente)) {
+              setBorradorPendiente(parsed);
+            }
+          }
+        } catch (e) {
+          console.warn('Error al leer borrador local:', e);
+        }
+      }
+
+      if (activo) {
+        setInicializado(true);
+      }
     }
-  }, [searchParams, listasPrecios, cliente, handleCambiarListaPrecio]);
+
+    inicializar();
+
+    return () => {
+      activo = false;
+    };
+  }, [pedidoIdAEditar, searchParams]);
+
+  // --- Autoguardado Reactivo en LocalStorage ---
+  useEffect(() => {
+    if (!inicializado) return;
+
+    // Si está todo vacío, no guardamos borrador innecesario
+    if (!cliente && items.length === 0 && !observaciones.trim()) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      try {
+        const borrador: BorradorLocal = {
+          cliente,
+          items,
+          observaciones,
+          numeroPresupuesto,
+          validezDias,
+          listaSeleccionadaId: listaSeleccionada?.id,
+          usarPreciosCliente,
+          guardadoAt: new Date().toLocaleTimeString('es-AR', {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          }),
+        };
+
+        localStorage.setItem(storageKey, JSON.stringify(borrador));
+        setUltimoGuardadoBorrador(borrador.guardadoAt);
+      } catch (err) {
+        console.warn('Error al autoguardar borrador:', err);
+      }
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [
+    inicializado,
+    storageKey,
+    cliente,
+    items,
+    observaciones,
+    numeroPresupuesto,
+    validezDias,
+    listaSeleccionada,
+    usarPreciosCliente,
+  ]);
+
+  // Restaurar borrador guardado
+  const handleRestaurarBorrador = () => {
+    if (!borradorPendiente) return;
+    if (borradorPendiente.cliente) {
+      setCliente(borradorPendiente.cliente);
+      cargarPrecios(borradorPendiente.cliente.id);
+    }
+    if (borradorPendiente.items) {
+      setItems(borradorPendiente.items);
+    }
+    if (borradorPendiente.observaciones) {
+      setObservaciones(borradorPendiente.observaciones);
+    }
+    if (borradorPendiente.numeroPresupuesto) {
+      setNumeroPresupuesto(borradorPendiente.numeroPresupuesto);
+    }
+    if (borradorPendiente.validezDias) {
+      setValidezDias(borradorPendiente.validezDias);
+    }
+    setBorradorPendiente(null);
+    setMensaje({ tipo: 'ok', texto: 'Borrador restaurado correctamente.' });
+    setTimeout(() => setMensaje(null), 3000);
+  };
+
+  // Descartar borrador
+  const handleDescartarBorrador = () => {
+    try {
+      localStorage.removeItem('fhl_borrador_nuevo_pedido');
+    } catch (e) {
+      console.warn(e);
+    }
+    setBorradorPendiente(null);
+  };
 
   // Seleccionar cliente
   const handleSeleccionarCliente = useCallback(
@@ -301,7 +480,6 @@ function FacturadorContenido() {
       if (c) {
         await cargarPrecios(c.id);
 
-        // Si el cliente tiene una lista de precios asignada, seleccionarla y recalcular
         if (c.lista_precio_id && listasPrecios.length > 0) {
           const asignada = listasPrecios.find((l) => l.id === c.lista_precio_id);
           if (asignada) {
@@ -315,7 +493,7 @@ function FacturadorContenido() {
     [listasPrecios, handleCambiarListaPrecio]
   );
 
-  // Agregar filtro a la tabla
+  // Agregar filtro a la lista de ítems
   const handleAgregarFiltro = useCallback(
     (filtro: Filtro | { codigo_fhl: string; precio?: number }) => {
       const codigo = filtro.codigo_fhl.trim();
@@ -331,7 +509,6 @@ function FacturadorContenido() {
 
       const precioBase = 'precio' in filtro && typeof filtro.precio === 'number' ? filtro.precio : 0;
 
-      // Guardar en el mapa de precios base
       if (precioBase > 0) {
         setPreciosBaseFiltros((prev) => {
           const next = new Map(prev);
@@ -340,7 +517,6 @@ function FacturadorContenido() {
         });
       }
 
-      // Calcular precio unitario según lista activa
       const precioCalculado = calcularPrecioUnitario(codigo, precioBase);
 
       const nuevoItem: ItemFactura = {
@@ -369,42 +545,8 @@ function FacturadorContenido() {
 
   const total = items.reduce((sum, i) => sum + i.cantidad * i.precioUnitario, 0);
 
-  // Guardar presupuesto en base de datos
-  const persistirPresupuestoEnDB = async () => {
-    if (!cliente) return null;
-
-    const { data: pres, error: errPres } = await supabase
-      .from('presupuestos')
-      .insert({
-        cliente_id: cliente.id,
-        numero: numeroPresupuesto.trim() || null,
-        validez_dias: validezDias,
-        observaciones: observaciones.trim() || null,
-        total: total,
-        estado: 'emitido',
-      })
-      .select()
-      .single();
-
-    if (errPres || !pres) {
-      console.error('Error al guardar presupuesto en DB:', errPres);
-      return null;
-    }
-
-    // Guardar ítems
-    const itemsDb = items.map((it) => ({
-      presupuesto_id: pres.id,
-      codigo_fhl: it.codigo_fhl,
-      cantidad: it.cantidad,
-      precio_unitario: it.precioUnitario,
-    }));
-
-    await supabase.from('items_presupuesto').insert(itemsDb);
-    return pres.id;
-  };
-
-  // Crear Pedido (con o sin descarga inmediata de PDF)
-  const handleCrearPedido = async (descargarPdf: boolean = false) => {
+  // --- Guardar / Crear Pedido o Actualizar Pedido Existente ---
+  const handleGuardarPedido = async (descargarPdf: boolean = false) => {
     if (!cliente) {
       setMensaje({ tipo: 'error', texto: 'Seleccioná un cliente primero.' });
       setTimeout(() => setMensaje(null), 4000);
@@ -420,44 +562,94 @@ function FacturadorContenido() {
     setMensaje(null);
 
     try {
-      // 1. Guardar pedido en Supabase
-      const { data: nuevoPedido, error: errPed } = await supabase
-        .from('pedidos')
-        .insert({
-          cliente_id: cliente.id,
-          estado: 'pendiente',
-          total: total,
-          observaciones: observaciones.trim() || null,
-        })
-        .select()
-        .single();
+      if (modoEdicion && pedidoIdAEditar) {
+        // --- ACTUALIZACIÓN DE PEDIDO EXISTENTE ---
+        const { error: errUpdatePed } = await supabase
+          .from('pedidos')
+          .update({
+            cliente_id: cliente.id,
+            total: total,
+            observaciones: observaciones.trim() || null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', pedidoIdAEditar);
 
-      if (errPed || !nuevoPedido) throw errPed;
+        if (errUpdatePed) throw errUpdatePed;
 
-      // 2. Guardar ítems del pedido
-      const itemsPedidoDb = items.map((it) => ({
-        pedido_id: nuevoPedido.id,
-        codigo_fhl: it.codigo_fhl,
-        cantidad: it.cantidad,
-        precio_unitario: it.precioUnitario,
-      }));
-      await supabase.from('items_pedido').insert(itemsPedidoDb);
+        // Reemplazar ítems del pedido
+        await supabase.from('items_pedido').delete().eq('pedido_id', pedidoIdAEditar);
 
-      // 3. Si se pidió descarga de PDF
-      if (descargarPdf) {
-        await generarPDF({
-          cliente,
-          items,
-          observaciones,
-          numeroPresupuesto: `PED-${nuevoPedido.id.slice(0, 8).toUpperCase()}`,
-          validezDias,
-        });
+        const itemsPedidoDb = items.map((it) => ({
+          pedido_id: pedidoIdAEditar,
+          codigo_fhl: it.codigo_fhl,
+          cantidad: it.cantidad,
+          precio_unitario: it.precioUnitario,
+        }));
+        await supabase.from('items_pedido').insert(itemsPedidoDb);
+
+        // Limpiar borrador local
+        try {
+          localStorage.removeItem(storageKey);
+        } catch (e) {
+          console.warn(e);
+        }
+
+        if (descargarPdf) {
+          await generarPDF({
+            cliente,
+            items,
+            observaciones,
+            numeroPresupuesto: `PED-${pedidoIdAEditar.slice(0, 8).toUpperCase()}`,
+            validezDias,
+          });
+        }
+
+        router.push(`/admin/pedidos/${pedidoIdAEditar}`);
+      } else {
+        // --- CREACIÓN DE NUEVO PEDIDO ---
+        const { data: nuevoPedido, error: errPed } = await supabase
+          .from('pedidos')
+          .insert({
+            cliente_id: cliente.id,
+            estado: 'pendiente',
+            total: total,
+            observaciones: observaciones.trim() || null,
+          })
+          .select()
+          .single();
+
+        if (errPed || !nuevoPedido) throw errPed;
+
+        const itemsPedidoDb = items.map((it) => ({
+          pedido_id: nuevoPedido.id,
+          codigo_fhl: it.codigo_fhl,
+          cantidad: it.cantidad,
+          precio_unitario: it.precioUnitario,
+        }));
+        await supabase.from('items_pedido').insert(itemsPedidoDb);
+
+        // Limpiar borrador local
+        try {
+          localStorage.removeItem(storageKey);
+        } catch (e) {
+          console.warn(e);
+        }
+
+        if (descargarPdf) {
+          await generarPDF({
+            cliente,
+            items,
+            observaciones,
+            numeroPresupuesto: `PED-${nuevoPedido.id.slice(0, 8).toUpperCase()}`,
+            validezDias,
+          });
+        }
+
+        router.push(`/admin/pedidos/${nuevoPedido.id}`);
       }
-
-      router.push(`/admin/pedidos/${nuevoPedido.id}`);
     } catch (err: any) {
       console.error(err);
-      setMensaje({ tipo: 'error', texto: err.message || 'Error al registrar el pedido' });
+      setMensaje({ tipo: 'error', texto: err.message || 'Error al procesar el pedido' });
       setGuardandoPedido(false);
       setTimeout(() => setMensaje(null), 4000);
     }
@@ -465,47 +657,121 @@ function FacturadorContenido() {
 
   // Limpiar todo
   const handleLimpiar = () => {
-    setCliente(null);
-    setPreciosCliente(new Map());
-    setItems([]);
-    setObservaciones('');
-    setNumeroPresupuesto('');
-    setValidezDias(30);
-    setMensaje(null);
-    setMostrarPreview(false);
-    if (previewUrl) {
-      URL.revokeObjectURL(previewUrl);
-      setPreviewUrl(null);
+    if (confirm('¿Limpiar todo el formulario y descartar el borrador actual?')) {
+      setCliente(null);
+      setPreciosCliente(new Map());
+      setItems([]);
+      setObservaciones('');
+      setNumeroPresupuesto('');
+      setValidezDias(30);
+      setMensaje(null);
+      setMostrarPreview(false);
+      try {
+        localStorage.removeItem(storageKey);
+      } catch (e) {
+        console.warn(e);
+      }
+      setUltimoGuardadoBorrador(null);
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+        setPreviewUrl(null);
+      }
     }
   };
 
+  if (cargandoEdicion) {
+    return (
+      <div className="py-20 flex flex-col items-center justify-center gap-3">
+        <div className="h-8 w-8 border-3 border-blue-900 border-t-transparent rounded-full animate-spin" />
+        <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+          Cargando datos del pedido para editar...
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
-      {/* Título de página */}
+      
+      {/* Banner de Borrador no guardado detectado */}
+      {borradorPendiente && !modoEdicion && (
+        <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-blue-950 animate-in fade-in slide-in-from-top-2">
+          <div className="flex items-center gap-2.5">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-blue-700 shrink-0">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+              <polyline points="17 21 17 13 7 13 7 21" />
+              <polyline points="7 3 7 8 15 8" />
+            </svg>
+            <div>
+              <p className="text-xs font-bold text-blue-900">
+                Se detectó un borrador guardado automáticamente
+              </p>
+              <p className="text-[11px] text-blue-700">
+                {borradorPendiente.cliente ? `Cliente: ${borradorPendiente.cliente.nombre} • ` : ''}
+                {borradorPendiente.items?.length || 0} filtros en la lista (Guardado a las {borradorPendiente.guardadoAt}).
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={handleRestaurarBorrador}
+              className="px-3.5 py-1.5 bg-blue-900 hover:bg-blue-800 text-white rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer"
+            >
+              Restaurar Borrador
+            </button>
+            <button
+              onClick={handleDescartarBorrador}
+              className="px-3 py-1.5 bg-white border border-blue-200 hover:bg-red-50 hover:text-red-700 text-slate-600 rounded-lg text-xs font-bold transition-all cursor-pointer"
+            >
+              Descartar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Título de página y Estado de Autoguardado */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-            Ventas & Producción
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+              {modoEdicion ? 'Modificación de Pedido' : 'Ventas & Producción'}
+            </span>
+            {modoEdicion && (
+              <span className="bg-amber-100 text-amber-800 border border-amber-200 text-[10px] font-black px-2 py-0.5 rounded uppercase tracking-wider">
+                Modo Edición
+              </span>
+            )}
+          </div>
+
           <h2 className="text-2xl font-black text-slate-800 tracking-tight">
-            Cargar Nuevo Pedido
+            {modoEdicion ? `Editar Pedido #${pedidoIdAEditar?.slice(0, 8)}` : 'Cargar Nuevo Pedido'}
           </h2>
           <p className="text-xs text-slate-500 mt-1">
-            Seleccioná el cliente, agregá los filtros y creá el pedido con descarga inmediata de comprobante PDF.
+            {modoEdicion
+              ? 'Modificá los filtros, cantidades o cliente asignado y guardá los cambios para actualizar el pedido.'
+              : 'Seleccioná el cliente, agregá los filtros y creá el pedido con comprobante PDF inmediato.'}
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
+          {/* Indicador de Autoguardado */}
+          {ultimoGuardadoBorrador && (
+            <div className="hidden sm:flex items-center gap-1.5 text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200/80 px-2.5 py-1 rounded-full font-semibold">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <span>Autoguardado {ultimoGuardadoBorrador}</span>
+            </div>
+          )}
+
           <button
-            onClick={() => router.push('/admin/pedidos')}
-            className="bg-slate-800 hover:bg-slate-700 text-white px-3.5 py-2 rounded-md text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 cursor-pointer"
+            onClick={() => router.push(modoEdicion ? `/admin/pedidos/${pedidoIdAEditar}` : '/admin/pedidos')}
+            className="bg-slate-800 hover:bg-slate-700 text-white px-3.5 py-2 rounded-lg text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 cursor-pointer"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2" />
               <rect x="9" y="3" width="6" height="4" rx="1" />
               <path d="M9 14l2 2 4-4" />
             </svg>
-            <span>Ver Todos los Pedidos</span>
+            <span>{modoEdicion ? 'Volver al Pedido' : 'Ver Todos los Pedidos'}</span>
           </button>
         </div>
       </div>
@@ -513,7 +779,7 @@ function FacturadorContenido() {
       {/* Mensaje flotante */}
       {mensaje && (
         <div
-          className={`px-4 py-3 rounded-md text-xs font-bold border transition-all ${
+          className={`px-4 py-3 rounded-lg text-xs font-bold border transition-all ${
             mensaje.tipo === 'ok'
               ? 'bg-green-50 text-green-700 border-green-200'
               : 'bg-red-50 text-red-700 border-red-200'
@@ -528,6 +794,7 @@ function FacturadorContenido() {
         
         {/* Formulario (Columna izquierda - 7 cols) */}
         <div className="lg:col-span-7 space-y-6">
+          
           {/* SECCIÓN 1: Cliente y Lista de Precios */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
             <SelectorCliente
@@ -558,14 +825,14 @@ function FacturadorContenido() {
           </div>
 
           {/* SECCIÓN 2: Agregar filtros */}
-          <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-5">
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
             <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">
               Agregar Filtros
             </h3>
             <BuscadorFiltroAutocompletar onSeleccionar={handleAgregarFiltro} />
             {!cliente && (
               <p className="text-[11px] text-amber-600 font-semibold mt-2">
-                Seleccioná un cliente primero para autocompletar su lista de precios personalizada.
+                Seleccioná un cliente para autocompletar su lista de precios personalizada.
               </p>
             )}
           </div>
@@ -579,18 +846,18 @@ function FacturadorContenido() {
 
           {/* SECCIÓN 4: Observaciones y Detalles del Presupuesto */}
           {items.length > 0 && (
-            <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-5 space-y-4">
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5 space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5">
-                    Número de Presupuesto (Opcional)
+                    Número de Comprobante / Presupuesto
                   </label>
                   <input
                     type="text"
                     value={numeroPresupuesto}
                     onChange={(e) => setNumeroPresupuesto(e.target.value)}
                     placeholder="Ej: 0001-000023"
-                    className="w-full border border-slate-300 rounded-md px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600"
                   />
                 </div>
                 <div>
@@ -602,7 +869,7 @@ function FacturadorContenido() {
                     min="1"
                     value={validezDias}
                     onChange={(e) => setValidezDias(Math.max(1, parseInt(e.target.value) || 1))}
-                    className="w-full border border-slate-300 rounded-md px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600"
                   />
                 </div>
               </div>
@@ -613,9 +880,9 @@ function FacturadorContenido() {
                 <textarea
                   value={observaciones}
                   onChange={(e) => setObservaciones(e.target.value)}
-                  placeholder="Notas adicionales para incluir en el documento..."
+                  placeholder="Notas adicionales o requerimientos del pedido..."
                   rows={2}
-                  className="w-full border border-slate-300 rounded-md px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 resize-none focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 resize-none focus:outline-none focus:ring-2 focus:ring-blue-600"
                 />
               </div>
             </div>
@@ -623,7 +890,7 @@ function FacturadorContenido() {
 
           {/* SECCIÓN 5: Acciones */}
           {items.length > 0 && (
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white rounded-lg shadow-sm border border-slate-200 p-5">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white rounded-xl shadow-sm border border-slate-200 p-5">
               <div className="text-xs text-slate-500">
                 <span className="font-bold text-slate-700">{items.length}</span> ítem(s) •{' '}
                 <span className="font-black text-blue-900 text-base font-mono">
@@ -635,37 +902,37 @@ function FacturadorContenido() {
                 <button
                   type="button"
                   onClick={handleLimpiar}
-                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors cursor-pointer"
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
                 >
                   Limpiar
                 </button>
 
                 <button
                   type="button"
-                  onClick={() => handleCrearPedido(false)}
+                  onClick={() => handleGuardarPedido(false)}
                   disabled={guardandoPedido}
-                  className="px-4 py-2 text-xs font-bold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-md transition-colors disabled:opacity-50 flex items-center gap-1.5 shadow-xs cursor-pointer"
+                  className="px-4 py-2 text-xs font-bold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-1.5 shadow-xs cursor-pointer"
                 >
                   {guardandoPedido ? (
                     <>
                       <div className="h-3.5 w-3.5 border-2 border-slate-700 border-t-transparent rounded-full animate-spin" />
-                      <span>Guardando...</span>
+                      <span>{modoEdicion ? 'Actualizando...' : 'Guardando...'}</span>
                     </>
                   ) : (
-                    <span>Crear Pedido</span>
+                    <span>{modoEdicion ? 'Guardar Cambios' : 'Crear Pedido'}</span>
                   )}
                 </button>
 
                 <button
                   type="button"
-                  onClick={() => handleCrearPedido(true)}
+                  onClick={() => handleGuardarPedido(true)}
                   disabled={guardandoPedido}
-                  className="px-5 py-2 text-xs font-bold text-white bg-green-700 hover:bg-green-800 rounded-md transition-colors disabled:opacity-50 flex items-center gap-1.5 shadow-sm cursor-pointer"
+                  className="px-5 py-2 text-xs font-bold text-white bg-green-700 hover:bg-green-800 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-1.5 shadow-sm cursor-pointer"
                 >
                   {guardandoPedido ? (
                     <>
                       <div className="h-3.5 w-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      <span>Creando y Descargando...</span>
+                      <span>{modoEdicion ? 'Actualizando y Descargando...' : 'Creando y Descargando...'}</span>
                     </>
                   ) : (
                     <>
@@ -674,7 +941,7 @@ function FacturadorContenido() {
                         <polyline points="7 10 12 15 17 10" />
                         <line x1="12" y1="15" x2="12" y2="3" />
                       </svg>
-                      <span>Crear Pedido y Descargar PDF</span>
+                      <span>{modoEdicion ? 'Guardar y Descargar PDF' : 'Crear Pedido y Descargar PDF'}</span>
                     </>
                   )}
                 </button>
@@ -685,19 +952,19 @@ function FacturadorContenido() {
 
         {/* Previsualización (Columna derecha - 5 cols) */}
         <div className="lg:col-span-5 lg:sticky lg:top-24 space-y-4">
-          <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-5 flex flex-col min-h-[450px]">
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5 flex flex-col min-h-[450px]">
             <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">
               Vista Previa del Documento
             </h3>
 
             {!cliente || items.length === 0 ? (
-              <div className="flex-1 flex flex-col items-center justify-center text-center p-6 bg-slate-50 border border-dashed border-slate-200 rounded-md">
+              <div className="flex-1 flex flex-col items-center justify-center text-center p-6 bg-slate-50 border border-dashed border-slate-200 rounded-lg">
                 <svg className="text-slate-300 mb-2" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
                   <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
                   <polyline points="14 2 14 8 20 8" />
                 </svg>
                 <p className="text-xs font-semibold text-slate-500">
-                  Completá los datos del presupuesto para habilitar la vista previa.
+                  Completá los datos del presupuesto o pedido para habilitar la vista previa.
                 </p>
               </div>
             ) : (
@@ -705,7 +972,7 @@ function FacturadorContenido() {
                 <button
                   onClick={actualizarPrevisualizacion}
                   disabled={cargandoPreview || generando}
-                  className="w-full bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold py-2.5 px-4 rounded-md transition-colors flex items-center justify-center gap-1.5 shadow-sm"
+                  className="w-full bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold py-2.5 px-4 rounded-lg transition-colors flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
                 >
                   {cargandoPreview ? (
                     <>
@@ -724,19 +991,19 @@ function FacturadorContenido() {
 
                 {previewUrl ? (
                   esMobile ? (
-                    <div className="flex-grow flex flex-col items-center justify-center text-center p-6 bg-slate-50 border border-slate-200 rounded-md h-[350px] space-y-4">
-                      <p className="text-xs font-bold text-slate-800">Presupuesto Generado</p>
+                    <div className="flex-grow flex flex-col items-center justify-center text-center p-6 bg-slate-50 border border-slate-200 rounded-lg h-[350px] space-y-4">
+                      <p className="text-xs font-bold text-slate-800">Documento Generado</p>
                       <a
                         href={previewUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="w-full bg-slate-800 text-white text-xs font-bold py-2.5 px-4 rounded-md text-center flex items-center justify-center gap-1.5"
+                        className="w-full bg-slate-800 text-white text-xs font-bold py-2.5 px-4 rounded-lg text-center flex items-center justify-center gap-1.5"
                       >
                         Abrir Vista Previa en Pantalla Completa
                       </a>
                     </div>
                   ) : (
-                    <div className="flex-grow border border-slate-200 rounded-md overflow-hidden h-[480px]">
+                    <div className="flex-grow border border-slate-200 rounded-lg overflow-hidden h-[480px]">
                       <iframe
                         src={`${previewUrl}#toolbar=0&navpanes=0`}
                         className="w-full h-full"
@@ -745,7 +1012,7 @@ function FacturadorContenido() {
                     </div>
                   )
                 ) : (
-                  <div className="flex-grow flex flex-col items-center justify-center text-center p-6 bg-slate-50 border border-dashed border-slate-200 rounded-md h-[480px]">
+                  <div className="flex-grow flex flex-col items-center justify-center text-center p-6 bg-slate-50 border border-dashed border-slate-200 rounded-lg h-[480px]">
                     <p className="text-xs text-slate-500">
                       Hacé click en <strong>Ver Vista Previa</strong> para generar una copia interactiva del documento.
                     </p>

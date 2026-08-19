@@ -200,8 +200,6 @@ export default function ClientesAdminPage() {
     const payload = {
       nombre: nombre.trim(),
       cuit: cuit.trim() || null,
-      email: email.trim() || null,
-      telefono: telefono.trim() || null,
       direccion: direccion.trim() || null,
       ciudad: ciudad.trim() || null,
       provincia: provincia.trim() || null,
@@ -210,7 +208,6 @@ export default function ClientesAdminPage() {
       descuento_predeterminado: Number(descuentoPredeterminado) || 0,
       plazo_pago: plazoPago,
       lista_precio_id: listaPrecioId || null,
-      notas: notas.trim() || null,
     };
 
     try {

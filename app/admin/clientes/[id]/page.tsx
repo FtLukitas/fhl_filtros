@@ -195,8 +195,6 @@ export default function ClienteDetallePage({ params }: PageProps) {
     const payload = {
       nombre: formNombre.trim(),
       cuit: formCuit.trim() || null,
-      email: formEmail.trim() || null,
-      telefono: formTelefono.trim() || null,
       direccion: formDireccion.trim() || null,
       ciudad: formCiudad.trim() || null,
       provincia: formProvincia.trim() || null,
@@ -205,7 +203,6 @@ export default function ClienteDetallePage({ params }: PageProps) {
       descuento_predeterminado: Number(formDescuento) || 0,
       plazo_pago: formPlazoPago,
       lista_precio_id: formListaPrecioId || null,
-      notas: formNotas.trim() || null,
     };
 
     try {

@@ -1,27 +1,37 @@
 # FHL Filtros — Documentación Integral del Sistema y Panel de Administración
 
-Este documento describe la arquitectura técnica, modelo de datos, flujos comerciales, endpoints y componentes implementados en la plataforma **FHL Filtros**.
+Este documento describe de manera exhaustiva la arquitectura técnica, modelo de datos, flujos comerciales, endpoints, módulos de administración y directivas de seguridad implementadas en la plataforma **FHL Filtros**.
 
 ---
 
 ## 1. Visión General del Proyecto
 
-La plataforma combina:
-1. **Catálogo Público de Consulta Rápida B2B/B2C**: Búsqueda ultrarrápida por código de filtro (FHL, OEM, cruzadas) o por modelo de vehículo, con fichas técnicas, dimensiones y fotos. Los precios se mantienen estrictamente ocultos del público general.
-2. **Panel de Administración Integral (`/admin`)**: Sistema de gestión comercial, financiero y operativo que cubre productos, carga masiva, clientes, cuenta corriente (deudas y saldo a favor), pedidos, pagos y presupuestación con exportación en PDF.
+La plataforma se divide en dos grandes subsistemas:
+
+1. **Catálogo Público de Consulta Rápida B2B/B2C (`/`)**:
+   - Búsqueda instantánea de filtros de habitáculo por código (FHL, OEM o equivalencias cruzadas de primeras marcas como Wega, Fram, Mann Filter, Mahle, Bosch, Tecfil).
+   - Buscador guiado por vehículos en cascada (Marca → Modelo → Versión / Motorización / Año).
+   - Fichas técnicas detalladas con dimensiones milimétricas, fotos de alta resolución y aplicaciones compatibles.
+   - **Los precios se mantienen estrictamente ocultos del público general.**
+
+2. **Panel de Administración Integral (`/admin`)**:
+   - Sistema comercial, financiero y operativo cerrado para el control de inventario, clientes, cuentas corrientes, presupuestación en PDF, pedidos, cobranzas, listas de precios directas y auditoría con IA.
 
 ---
 
 ## 2. Stack Tecnológico
 
-- **Framework**: [Next.js](https://nextjs.org/) (App Router, Server Components y Client Components selectivos).
-- **Lenguaje**: TypeScript.
-- **Base de Datos & Storage**: [Supabase](https://supabase.com/) (PostgreSQL + Supabase Storage Bucket `productos`).
-- **Estilos**: TailwindCSS (diseño limpio, profesional, sin emojis).
-- **Procesamiento de Archivos**:
-  - `xlsx` para importación y previsualización de planillas Excel (`.xlsx`, `.xls`) y `.csv`.
+- **Framework**: [Next.js](https://nextjs.org/) (App Router, Server Components por defecto y Client Components interactivos con `'use client'`).
+- **Lenguaje**: TypeScript (Strict Mode).
+- **Base de Datos & Storage**: [Supabase](https://supabase.com/) (PostgreSQL relacional + Supabase Storage Bucket `productos`).
+- **Estilos & UI**: TailwindCSS (diseño limpio, profesional, paleta HSL azul marino / pizarra corporativa, accesibilidad WCAG 2.1 AA, sin emojis).
+- **Procesamiento de Archivos & PDF**:
+  - `xlsx` para importación, exportación y análisis de planillas Excel (`.xlsx`, `.xls`) y `.csv`.
   - `jspdf` y `jspdf-autotable` para generación y descarga inmediata de presupuestos y comprobantes en PDF.
-  - HTML5 Canvas API para compresión automática y conversión de imágenes a WebP en el navegador antes del upload.
+  - HTML5 Canvas API para compresión automática y conversión de fotos a formato `.webp` en el cliente.
+- **Inteligencia Artificial**:
+  - OpenRouter API con modelos gratuitos de alta precisión técnica: `nvidia/nemotron-3-nano-30b-a3b:free` y `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`.
+  - Endpoints de servidor que custodian la clave de API con tolerancia a caídas (fallback automático).
 - **Seguridad**: Autenticación HMAC-SHA256 con cookies seguras `HttpOnly` y protección en cliente mediante `AdminAuthGuard`.
 
 ---
@@ -30,12 +40,14 @@ La plataforma combina:
 
 ```mermaid
 erDiagram
-    "Tabla A (Filtros)" ||--o{ "precios_cliente" : "tiene precios asignados"
+    "Tabla A (Filtros)" ||--o{ "items_lista_precio" : "posee precios por lista"
+    "Tabla A (Filtros)" ||--o{ "precios_cliente" : "precios especiales cliente"
     "Tabla A (Filtros)" ||--o{ "items_pedido" : "incluido en"
     "Tabla A (Filtros)" ||--o{ "items_presupuesto" : "incluido en"
     "Tabla B (Vehiculos)" }o--|| "Tabla A (Filtros)" : "filtro_asociado"
     
-    clientes ||--o{ "precios_cliente" : "posee"
+    listas_precios ||--o{ items_lista_precio : "contiene"
+    clientes ||--o{ "precios_cliente" : "posee tarifas acordadas"
     clientes ||--o{ pedidos : "realiza"
     clientes ||--o{ presupuestos : "recibe"
     clientes ||--o{ pagos : "abona"
@@ -48,264 +60,168 @@ erDiagram
     pedidos ||--o{ movimientos_saldo : "aplica saldo"
 ```
 
-### Detalle de Tablas
+### Detalle de Tablas Principales
 
 #### 1. `"Tabla A"` (Catálogo de Filtros)
 | Columna | Tipo | Descripción |
 | :--- | :--- | :--- |
 | `id` | BIGINT (PK) | Identificador autoincremental |
-| `codigo_fhl` | TEXT (UNIQUE) | Código FHL en mayúsculas (ej: `FHL-001`) |
-| `equivalencias` | TEXT | Códigos OEM y referencias cruzadas |
-| `dimensiones` | TEXT | Medidas técnicas (ej: `Alto: 30mm, Diámetro: 200mm`) |
-| `descripcion_aplicacion` | TEXT | Resumen de vehículos compatibles |
-| `imagen_url` | TEXT / JSON | Array serializado con URLs de imágenes en Supabase Storage |
-| `buscador_unificado` | TEXT | Texto normalizado sin espacios ni guiones para búsqueda |
-| `precio` | NUMERIC(12,2) | Precio base de facturación interna (no visible en web) |
-| `activo` | BOOLEAN | `true` para visible en catálogo web, `false` para oculto |
+| `codigo_fhl` | TEXT (UNIQUE) | Código FHL normalizado en mayúsculas (ej: `FHL-103`) |
+| `equivalencias` | TEXT | Referencias OEM y cruces de marcas comerciales |
+| `dimensiones` | TEXT | Medidas técnicas (ej: `291 mm x 159 mm x 30 mm`) |
+| `descripcion_aplicacion` | TEXT | Resumen legible de vehículos compatibles |
+| `imagen_url` | TEXT / JSON | URLs de imágenes en Supabase Storage |
+| `buscador_unificado` | TEXT (GENERATED STORED) | Texto indexado sin espacios ni guiones para búsqueda |
+| `precio` | NUMERIC(12,2) | Precio base de facturación interna |
+| `activo` | BOOLEAN | `true` para visible en web, `false` para oculto |
 | `eliminado` | BOOLEAN | `true` para papelera (soft-delete), `false` para activo |
 
 #### 2. `"Tabla B"` (Aplicaciones por Vehículo)
 | Columna | Tipo | Descripción |
 | :--- | :--- | :--- |
 | `id` | BIGINT (PK) | Identificador autoincremental |
-| `marca` | TEXT | Marca del vehículo (ej: `FORD`, `VOLKSWAGEN`) |
-| `modelo` | TEXT | Modelo (ej: `FOCUS`, `GOL`) |
-| `version` | TEXT | Motorización / versión (ej: `2.0 16V`) |
-| `año` | TEXT | Rango de años (ej: `2012 ->`) |
-| `filtro_asociado` | TEXT | Código FHL vinculado |
+| `marca` | TEXT | Marca del vehículo (ej: `CITROEN`, `FIAT`, `FORD`) |
+| `modelo` | TEXT | Modelo comercial (ej: `BERLINGO`, `PALIO`, `FOCUS`) |
+| `version` | TEXT | Motorización / versión (ej: `1.6 HDI`, `1.4 FIRE`) |
+| `año` | TEXT | Rango de años de compatibilidad (ej: `2010 ->`) |
+| `filtro_asociado` | TEXT | Código FHL vinculado (`Tabla A.codigo_fhl`) |
 | `eliminado` | BOOLEAN | Estado de papelera |
 
-#### 3. `clientes` (Cuentas Corrientes & Clientes)
+#### 3. `listas_precios` (Listas de Precios Directas)
+| Columna | Tipo | Descripción |
+| :--- | :--- | :--- |
+| `id` | UUID (PK) | Identificador único de la lista |
+| `nombre` | TEXT | Nombre de la lista (ej: `Mayorista 1`, `Comercio`, `Distribuidor`) |
+| `descripcion` | TEXT | Notas o alcance comercial |
+| `tipo_ajuste` | VARCHAR(20) | `'excel'` (precios directos fijos) o `'porcentaje'` (ajuste masivo %) |
+| `porcentaje` | NUMERIC(5,2) | Margen porcentual sobre el catálogo (+/- %) |
+| `activa` | BOOLEAN | Habilitada para selección en el facturador |
+| `es_predeterminada` | BOOLEAN | Lista predeterminada por defecto al abrir el facturador |
+| `eliminado` | BOOLEAN | Estado de papelera |
+
+#### 4. `items_lista_precio` (Precios Específicos por Filtro)
+| Columna | Tipo | Descripción |
+| :--- | :--- | :--- |
+| `id` | BIGINT (PK) | Identificador |
+| `lista_id` | UUID (FK) | Lista de precios propietaria |
+| `codigo_fhl` | TEXT | Código de filtro |
+| `precio` | NUMERIC(12,2) | Precio unitario fijado |
+| `*Unique*` | `(lista_id, codigo_fhl)` | Índice único que impide duplicados por lista y código |
+
+#### 5. `clientes` (Cuentas Corrientes y Clientes)
 | Columna | Tipo | Descripción |
 | :--- | :--- | :--- |
 | `id` | UUID (PK) | Identificador único |
 | `nombre` | TEXT | Razón social o nombre comercial |
 | `cuit` | TEXT | CUIT / Identificación fiscal |
 | `condicion_iva` | VARCHAR(50) | Responsable Inscripto, Monotributo, Exento, Consumidor Final |
-| `tipo_cliente` | VARCHAR(50) | Mayorista, Distribuidor, Casa de Repuestos, Taller Mecánico, Minorista |
-| `email` | TEXT | Correo electrónico de contacto |
-| `telefono` | TEXT | Teléfono / WhatsApp |
-| `direccion` | TEXT | Domicilio comercial o de entrega |
-| `ciudad` | TEXT | Localidad / Ciudad |
-| `provincia` | TEXT | Provincia |
+| `tipo_cliente` | VARCHAR(50) | Mayorista, Distribuidor, Casa de Repuestos, Taller, Minorista |
+| `email` / `telefono` | TEXT | Datos de contacto comercial |
+| `direccion` / `ciudad` / `provincia` | TEXT | Ubicación y logística |
 | `descuento_predeterminado` | NUMERIC(5,2) | Descuento comercial base (%) |
-| `plazo_pago` | VARCHAR(50) | Contado, 15 días, 30 días, 45 días, 60 días, Cuenta Corriente |
-| `notas` | TEXT | Observaciones internas |
+| `plazo_pago` | VARCHAR(50) | Contado, 15 días, 30 días, 60 días, Cuenta Corriente |
+| `lista_precio_id` | UUID (FK) | Lista de precios asignada al cliente por defecto |
 | `eliminado` | BOOLEAN | Estado de papelera |
-| `created_at` | TIMESTAMPTZ | Fecha de alta |
 
-#### 4. `precios_cliente` (Listas de Precios Personalizadas)
+#### 6. `precios_cliente` (Tarifas Personalizadas por Cliente)
 | Columna | Tipo | Descripción |
 | :--- | :--- | :--- |
 | `id` | BIGINT (PK) | Identificador |
-| `cliente_id` | BIGINT (FK -> clientes) | Cliente propietario de la tarifa |
-| `codigo_fhl` | TEXT | Código de filtro al que aplica |
-| `precio` | NUMERIC(12,2) | Precio especial acordado |
-| `*Unique*` | `(cliente_id, codigo_fhl)` | Evita duplicados por cliente y filtro |
+| `cliente_id` | UUID (FK) | Cliente propietario de la tarifa |
+| `codigo_fhl` | TEXT | Código de filtro |
+| `precio` | NUMERIC(12,2) | Precio especial acordado (prioridad máxima en facturación) |
 
-#### 5. `presupuestos` & `items_presupuesto`
-- `presupuestos`: almacena número correlativo (`id`), cliente vinculado, fecha, subtotal, descuento, total y estado (`emitido`, `convertido`).
-- `items_presupuesto`: desglose de códigos, cantidades, precios unitarios y subtotales.
+#### 7. `pedidos` & `items_pedido`
+- `pedidos`: Almacena el pedido con estado (`pendiente`, `confirmado`, `entregado`, `cancelado`), cliente vinculado, total, observaciones y soporte para papelera (`eliminado`).
+- `items_pedido`: Desglose de filtros con cantidades y precio unitario pactado al momento de la venta.
 
-#### 6. `pedidos` & `items_pedido`
-- `pedidos`: almacena el pedido de compra con estado (`pendiente`, `confirmado`, `entregado`, `cancelado`), cliente vinculado, presupuesto de origen opcional, fecha de entrega estimada y notas.
-- `items_pedido`: artículos solicitados con cantidades y precios acordados.
-
-#### 7. `pagos` (Registro de Cobranzas)
-| Columna | Tipo | Descripción |
-| :--- | :--- | :--- |
-| `id` | BIGINT (PK) | Identificador |
-| `pedido_id` | BIGINT (FK -> pedidos) | Pedido al que se imputa el pago |
-| `cliente_id` | BIGINT (FK -> clientes) | Cliente emisor del pago |
-| `monto` | NUMERIC(12,2) | Importe abonado |
-| `metodo` | TEXT | `efectivo`, `transferencia`, `cheque`, `mercadopago` |
-| `referencia` | TEXT | Número de operación bancaria o comprobante |
-| `created_at` | TIMESTAMPTZ | Fecha de cobro |
-
-#### 8. `movimientos_saldo` (Libro Mayor de Saldo a Favor)
-- Permite registrar créditos a favor del cliente generados automáticamente por sobrepagos (`tipo = 'excedente'`) o deducciones aplicadas a nuevos pedidos (`tipo = 'aplicado'`).
-- El saldo a favor de un cliente es la suma aritmética: `SUM(monto)`.
+#### 8. `pagos` & `movimientos_saldo`
+- `pagos`: Registro de cobranzas imputadas a cada pedido (`efectivo`, `transferencia`, `cheque`, `mercadopago`, `saldo_a_favor`).
+- `movimientos_saldo`: Libro mayor de créditos automáticos por excedentes o deducciones aplicadas.
 
 ---
 
-## 4. Estructura de Módulos del Sistema
+## 4. Módulos del Panel de Administración (`/admin`)
 
-### 4.1. Catálogo Web Público
-- **Ruta**: `/` ([`app/page.tsx`](file:///c:/fhl_filtros/app/page.tsx))
-- **Buscador de Códigos**: Filtrado instantáneo en tiempo real (`ilike %termino%`) con normalización de caracteres, omitiendo registros con `activo = false` o `eliminado = true`.
-- **Buscador de Vehículos**: Cascada de selección Marca → Modelo → Año/Versión.
-- **Ficha Técnica (Modal)**: Controlado estrictamente por URL (`?filtro=FHL-XXX`) sin estados locales booleanos, compatible con navegación atrás/adelante del navegador.
+El panel está organizado en **6 módulos principales**:
 
-### 4.2. Autenticación & Seguridad del Panel
-- **Login**: `/admin/login` ([`app/admin/login/page.tsx`](file:///c:/fhl_filtros/app/admin/login/page.tsx)).
-- **Validación de Credenciales**: Variables en `.env.local` (`ADMIN_USER`, `ADMIN_PASSWORD`, `ADMIN_SECRET`).
-- **Mecanismo de Token**:
-  - `POST /api/auth/login`: Genera un token HMAC-SHA256 con payload `{ user, exp }` y lo almacena en la cookie `fhl_admin_session` (`HttpOnly`, `SameSite=Lax`, `Path=/`).
-  - `POST /api/auth/logout`: Elimina la cookie de sesión.
-  - `GET /api/auth/check`: Valida la firma del token criptográficamente.
-- **Protección de Rutas**: [`AdminAuthGuard.tsx`](file:///c:/fhl_filtros/app/admin/components/AdminAuthGuard.tsx) envuelve todo el layout `/admin` e intercepta accesos no autorizados redirigiendo a `/admin/login`.
+### 4.1. 🛒 Facturador Rápido, Presupuestador & Editor de Pedidos (`/admin/facturador`)
+- **Resolución Lineal de Precios**:
+  1. Si el cliente tiene un precio acordado personal (`precios_cliente`), lo aplica automáticamente.
+  2. Si la lista seleccionada tiene un precio específico cargado (`items_lista_precio`), lo aplica.
+  3. Si la lista es porcentual, aplica el % sobre el precio base del catálogo.
+  4. Por defecto, toma el precio base del catálogo (`Tabla A.precio`).
+- **Autoguardado en Tiempo Real (Protección de Borrador)**:
+  - Mientras el usuario interactúa con el facturador, el estado se guarda continuamente en `localStorage`.
+  - Si la página se cierra, se corta la luz o se recarga la pestaña, se muestra una alerta superior destacada con el botón **"Restaurar Borrador"** (recuperando cliente, filtros, cantidades y observaciones).
+  - Al completar el pedido, el borrador se elimina de forma limpia.
+- **Edición Completa de Pedidos Existentes (`/admin/facturador?pedidoId=XYZ`)**:
+  - Carga el cliente, observaciones y todos los filtros del pedido existente en modo edición.
+  - Permite agregar/quitar filtros, cambiar cantidades o recalcular precios.
+  - Al hacer click en **"Guardar Cambios"**, actualiza el pedido y sus ítems en la base de datos sin duplicar registros.
+- **Generación de PDF**:
+  - Motor integrado con `jsPDF` y `jspdf-autotable`.
+  - Previsualización en vivo (iframe en escritorio, pantalla completa en móviles).
 
-### 4.3. Dashboard Principal
-- **Ruta**: `/admin` ([`app/admin/page.tsx`](file:///c:/fhl_filtros/app/admin/page.tsx))
-- **Módulos de Acceso Directo**: Tarjetas informativas hacia Productos, Clientes, Pedidos, Facturador e Historial.
-- **Monitoreo de Actividad**:
-  - Últimos pedidos registrados con estado y botón de acceso rápido.
-  - Ranking de clientes con mayor deuda pendiente.
-  - Últimos presupuestos emitidos con opción de descarga de PDF.
+### 4.2. 📦 Pedidos y Remitos (`/admin/pedidos` y `/admin/pedidos/[id]`)
+- **Control de Ciclo de Vida**: Estados `pendiente` → `confirmado` → `entregado` / `cancelado`.
+- **Acceso Directo a Edición**: Botón ✏️ en la tabla de pedidos y botón destacado **"Editar Pedido"** en la ficha individual.
+- **Cobranzas y Cuentas**: Registro de pagos parciales o totales, imputación automática de saldo a favor del cliente y control de deuda pendiente.
+- **Papelera (Soft-delete)**: Restauración o borrado definitivo de pedidos.
 
-### 4.4. Productos & Catálogo
-- **Ruta**: `/admin/productos` ([`app/admin/productos/page.tsx`](file:///c:/fhl_filtros/app/admin/productos/page.tsx))
-- **Gestión de Filtros (Tabla A)**:
-  - Edición inline y creación con campos: Código FHL, Equivalencias OEM, Dimensiones, Aplicación, Precio Base y Switch de Visibilidad en Web.
-  - Filtrado por pestañas: *Todos*, *Visibles en Web* y *Ocultos*.
-  - Soft-delete a papelera con opción de restauración o purga física definitiva.
-- **Gestor de Imágenes**:
-  - Componente [`ImagenUploader.tsx`](file:///c:/fhl_filtros/app/admin/productos/components/ImagenUploader.tsx).
-  - Conversión a formato WebP optimizado en el cliente mediante Canvas (`lib/supabase-storage.ts`).
-  - Almacenamiento en bucket público `productos` de Supabase Storage.
-- **Importador Masivo Excel / CSV**:
-  - Componente [`ImportadorExcel.tsx`](file:///c:/fhl_filtros/app/admin/productos/components/ImportadorExcel.tsx).
-  - **Descarga de Plantilla Excel**: Genera dinámicamente archivos `.xlsx` (`plantilla_importacion_filtros_fhl.xlsx` y `plantilla_importacion_vehiculos_fhl.xlsx`) con anchos de columna formateados y datos de muestra listos para rellenar.
-  - **Mapeo Automático de Columnas**:
-    - **Filtros (`Tabla A`)**: Detecta `codigo_fhl`, `equivalencias`, `dimensiones`, `descripcion_aplicacion`, `precio` y `activo` (visibilidad en web).
-    - **Autocompletado de Columnas**: Calcula e indexa automáticamente el `buscador_unificado` uniendo y normalizando código + equivalencias + aplicaciones, y establece `eliminado = false`.
-    - **Vehículos (`Tabla B`)**: Detecta `marca`, `modelo`, `version`, `año` y `filtro_asociado`.
-  - Comparación en memoria con la base de datos para mostrar resumen de filas nuevas, a actualizar, sin cambios y errores antes de ejecutar el `upsert`.
+### 4.3. 👥 Clientes & Cuentas Corrientes (`/admin/clientes` y `/admin/clientes/[id]`)
+- Gestión de clientes, CUIT, condición de IVA, listas asignadas y plazos de pago.
+- Editor de **Precios Acordados por Cliente** para filtros específicos.
+- Historial de cuenta corriente, libro mayor de saldo a favor y resumen de deuda.
 
-### 4.5. Clientes & Cuenta Corriente
-- **Listado General**: `/admin/clientes` ([`app/admin/clientes/page.tsx`](file:///c:/fhl_filtros/app/admin/clientes/page.tsx)).
-  - Tarjetas de cliente con indicadores de Deuda Acumulada y Saldo a Favor.
-  - Filtros rápidos: *Todos*, *Con Deuda*, *Con Saldo a Favor*, *Al Día*.
-  - **Edición y Ajuste Rápido de Saldo**: Botón directo en la tarjeta y en la métrica de Saldo a Favor para abrir el modal de ajuste de cuenta corriente sin salir del listado.
-  - **Papelera & Eliminación Definitiva**:
-    - **Mover a Papelera**: Soft-delete cambiando `eliminado = true` para evitar pérdidas accidentales.
-    - **Restaurar**: Regresa el cliente al listado activo.
-    - **Eliminar Definitivo**: Purga completa de la base de datos limpiando en cascada sus precios asignados, pagos, saldos y pedidos.
-- **Perfil Individual de Cliente**: `/admin/clientes/[id]` ([`app/admin/clientes/[id]/page.tsx`](file:///c:/fhl_filtros/app/admin/clientes/[id]/page.tsx)).
-  - **Modal de Ajuste de Saldo a Favor (`ModalAjusteSaldo.tsx`)**:
-    - **Fijar Saldo Exacto**: Permite ingresar el saldo final deseado calculando automáticamente la diferencia e insertando el movimiento contable correspondiente.
-    - **Sumar Crédito (+)**: Carga de anticipos, sobrepagos, notas de crédito o bonificaciones.
-    - **Restar / Deducir (-)**: Registro de devoluciones en efectivo o compensaciones.
-    - Acceso directo desde la tarjeta de Saldo a Favor, barra de acciones superior y pestaña de movimientos.
-  - **Pestaña Historial de Pedidos**: Historial completo con estado operativo (pendiente/entregado), estado financiero y deuda restante.
-  - **Pestaña Pagos**: Desglose de pagos realizados, método y referencia.
-  - **Pestaña Saldo a Favor**: Libro de créditos y deducciones con eliminación / anulación de movimientos individuales con confirmación.
-  - **Pestaña Lista de Precios**: Matriz de precios personalizados para el cliente con buscador, agregado rápido y edición inline.
+### 4.4. 🏷️ Catálogo de Filtros y Vehículos (`/admin/productos`)
+- Gestión unificada de filtros (`Tabla A`) y aplicaciones vehiculares (`Tabla B`).
+- **Importador Excel Inteligente**:
+  - Carga masiva con detección automática de columnas (`Código`, `Equivalencias`, `Dimensiones`, `Aplicación`, `Precio`, `Activo`).
+  - Previsualización diferencial (Nuevos, Actualizados, Sin cambios, Errores).
+  - Subida de imágenes con optimización y compresión a WebP.
+- Papelera de reciclaje independiente para filtros y aplicaciones.
 
-### 4.6. Gestión de Pedidos, Ventas & Cobranzas
-- **Listado de Pedidos**: `/admin/pedidos` ([`app/admin/pedidos/page.tsx`](file:///c:/fhl_filtros/app/admin/pedidos/page.tsx)).
-  - Dimensión Operativa: Estados *Pendiente*, *Confirmado*, *Entregado*, *Cancelado*.
-  - Dimensión Financiera: Indicadores de *Total*, *Pagado*, *Deuda* y filtro rápido *Con Deuda Pendiente*.
-  - **Papelera & Eliminación Definitiva**:
-    - **Mover a Papelera**: Soft-delete seguro (`eliminado = true`).
-    - **Restaurar**: Devuelve el pedido al tablero general con su estado intacto.
-    - **Eliminar Definitivo**: Purga permanente de la base de datos removiendo el pedido, sus `items_pedido` y sus registros de `pagos`.
-- **Ficha de Pedido & Cobranza**: `/admin/pedidos/[id]` ([`app/admin/pedidos/[id]/page.tsx`](file:///c:/fhl_filtros/app/admin/pedidos/[id]/page.tsx)).
-  - **Descarga Inmediata de PDF / Presupuesto**: Genera el comprobante membretado oficial con 1 click.
-  - Transiciones de ciclo de vida (`pendiente` → `confirmado` → `entregado`).
-  - Registro de pagos con cálculo automático de saldo restante.
-  - **Tratamiento de Excedentes**: Si el cliente paga de más, el excedente se acredita automáticamente en `movimientos_saldo` como crédito a favor.
-  - **Aplicación de Saldo**: Si el cliente posee saldo a favor previo, se puede imputar directamente al pedido para cancelar deuda.
-  - **Banner de Papelera**: Si el pedido está en papelera, advierte al usuario y ofrece botones rápidos de restauración o eliminación irreversible.
+### 4.5. 💵 Listas de Precios Directas (`/admin/listas-precios`)
+- **Listas Pre-cargadas Sincronizadas**:
+  - `Mayorista 1` (Predeterminada) — 114 filtros
+  - `Mayorista 2` — 114 filtros
+  - `Mayorista 3` — 114 filtros
+  - `Mayorista Base` — 114 filtros
+  - `MDP con Bolsa` — 114 filtros
+  - `MDP c/Bolsa Starfilt` — 114 filtros
+  - `Comercio` — 114 filtros
+- **Importador Excel de 2 Columnas**:
+  - Detecta automáticamente columnas `[Filtro / Código, Precio]`.
+  - Descarga de plantilla oficial de 2 columnas pre-cargada con los filtros del catálogo.
+- **Editor Interactivo de Precios (`ModalVerPreciosLista.tsx`)**:
+  - **Edición Inline**: Click en cualquier precio para modificarlo y guardarlo con `Enter`.
+  - **Ajuste Masivo por %**: Aumento o descuento global para toda la lista con redondeo configurable.
+  - **Poblar desde Catálogo**: Carga rápida de todos los filtros del catálogo con 1 click.
+  - **Exportar Excel**: Descarga limpia en formato `.xlsx`.
 
-### 4.7. Múltiples Listas de Precios & Facturación Dinámica
-- **Módulo de Gestión de Tarifas**: `/admin/listas-precios` ([`app/admin/listas-precios/page.tsx`](file:///c:/fhl_filtros/app/admin/listas-precios/page.tsx)).
-- **Modalidades de Lista Configurables**:
-  1. **Vinculada en Vivo a Costeo de Fábrica (`tipo_ajuste: 'costeo'`)**:
-     - Conectada a un canal de costeo específico (*Costo Mayorista Base, MDP con bolsa, Mayorista 1, Mayorista 2, Mayorista 3, Comercio*, o multiplicadores personalizados).
-     - **Recálculo automático reactivo**: Si cambia el precio del papel, pegamento, mano de obra o ganancia en `/admin/costeo`, los precios de esta lista se actualizan al instante en el Facturador sin intervención manual.
-     - Opciones avanzadas: Ajuste porcentual adicional sobre el canal (ej: $+5\%$, $-3\%$) y regla de redondeo comercial (*Exacto con centavos, Entero, Múltiplos de $10, Múltiplos de $100*).
-     - Botón de **"Sincronizar BD"** para generar una copia estática de respaldo en `items_lista_precio`.
-  2. **Planilla Excel Fija (`tipo_ajuste: 'excel'`)**:
-     - Importación de un archivo Excel con códigos de filtro y precios fijos asociados (útil para listas congeladas por convenio).
-  3. **Porcentaje Global (`tipo_ajuste: 'porcentaje'`)**:
-     - Listas con descuento o recargo automático sobre el catálogo oficial (`Tabla A`).
-- **Importador de Precios por Excel (`ImportadorExcelListaPrecio.tsx`)**:
-  - Detección automática de encabezados (`CODIGO`, `CODIGO_FHL`, `FILTRO`, `PRECIO`, `MAYORISTA`, `IMPORTE`).
-  - Descarga de plantilla Excel precargada con todos los filtros actuales del catálogo (`Tabla A`).
-  - Previsualización y validación de filas antes de guardar con feedback de progreso.
-- **Visor & Editor de Matriz de Precios (`ModalVerPreciosLista.tsx`)**:
-  - Permite inspeccionar qué productos y precios específicos tiene asignados cada lista.
-  - Buscador rápido por código FHL y edición inline de precios.
-  - Exportación de la lista a archivo `.xlsx`.
-- **Simulador en Vivo**: Permite seleccionar cualquier filtro del catálogo y ver en tiempo real cómo varían los precios finales en listas de costeo, Excel o porcentaje.
-- **Asignación por Cliente**: En `/admin/clientes` y `/admin/clientes/[id]`, se puede fijar qué lista de precios tiene asignada cada cliente por defecto.
-- **Selector Dinámico en Facturador (`/admin/facturador`)**:
-  - Selector interactivo con badges contextuales: `🔗 Costeo (Mayorista 1)`, `Planilla Excel` o `% Descuento`.
-  - Auto-selección inteligente de la lista del cliente al elegir el comprador.
-  - **Recálculo instantáneo**: Cambiar la lista con productos ya cargados en la tabla consulta al instante el motor de costeo, la matriz de Excel o aplica el porcentaje y actualiza los precios unitarios y el total.
-  - Opción de toggle para priorizar o ignorar tarifas especiales fijadas en `precios_cliente`.
-- **Ciclo de Vida de Listas (Papelera & Eliminación Definitiva)**:
-  - **Mandar a Papelera (Soft Delete)**: `listas_precios.eliminado = true`, oculta la lista del Facturador y del selector de clientes sin perder los datos ni los precios cargados.
-  - **Pestaña Papelera**: Vista dedicada con conteo badge donde se pueden inspeccionar las listas borradas y la fecha de eliminación.
-  - **Restaurar**: Devuelve la lista al estado activo y disponible en el Facturador.
-  - **Eliminación Permanente (Hard Delete)**: Modal de confirmación irreversible que limpia las asignaciones de clientes (`clientes.lista_precio_id = null`), borra los precios asociados en `items_lista_precio` y destruye el registro de la lista de la base de datos.
-  - **Vaciar Papelera**: Botón para depurar todas las listas en papelera en un solo paso.
-  - **Protección de Lista Predeterminada**: El sistema impide mandar a papelera la lista marcada como predeterminada hasta que se designe otra.
-
-### 4.8. Auditoría Inteligente de Catálogo & Cargas Excel (OpenRouter IA)
-- **Módulo Dedicado**: `/admin/auditoria` ([`app/admin/auditoria/page.tsx`](file:///c:/fhl_filtros/app/admin/auditoria/page.tsx)).
-- **Motor de Inteligencia Artificial**:
-  - Modelo ultra-rápido en español **`nvidia/nemotron-3-nano-30b-a3b:free`** (~420ms) con fallback multi-proveedor a **`openrouter/free`** y **`openai/gpt-oss-20b:free`**.
-  - Endpoint Server-Side: `/api/admin/auditoria-excel` ([`app/api/admin/auditoria-excel/route.ts`](file:///c:/fhl_filtros/app/api/admin/auditoria-excel/route.ts)).
-- **Auditoría Previa en Cargas Masivas Excel (`ImportadorExcel.tsx`)**:
-  - Inspecciona el archivo antes de tocar la base de datos.
-  - **Detección de Precios Anómalos**: Alertas por precios en `$0` o precios mayores a `$100.000` (posibles ceros de más o errores de coma decimal).
-  - **Detección de Dimensiones Incoherentes**: Alertas por medidas superiores a `1000 mm` (más de 1 metro) o cargadas en centímetros sin especificar unidad.
-  - **Detección de Códigos y Equivalencias Rotas**: Alertas por falta de código FHL, códigos duplicados o equivalencias concatenadas sin comas.
-  - **Visualización Fila por Fila**: Resalta con badge y mensaje de advertencia específico la fila observada en la previsualización.
-- **Auditoría Global Continua & Chat Interactivo (Hero Workspace)**:
-  - Evaluación de salud de toda la base de datos (`Tabla A` y `Tabla B`).
-  - Score de Salud (0 - 100%), Dictamen (*Aprobado*, *Advertencias*, *Riesgoso*), Resumen Ejecutivo y Recomendaciones.
-  - **Chat de Auditoría con Renderizado Markdown (`MarkdownRenderer.tsx`)**:
-    - Espacio de trabajo a pantalla completa (Full Width Workspace) sin bordes pesados ni restricciones estrechas.
-    - Soporte completo de tablas Markdown (`| ... |`), listas con viñetas, fragmentos de código, negritas y citas.
-    - Memoria contextual del catálogo en tiempo real con sugerencias rápidas sin barras de scroll forzadas.
-  - **Control de Temperatura y Precisión**:
-    - **`0.0 (Ultra Fino)`**: Muestreo determinístico estricto (*greedy decoding* con `top_p: 0.1`) para garantizar cero alucinaciones y exactitud matemática fáctica sobre los registros reales.
-    - **`0.2 (Normal)`**: Análisis riguroso con redacción fluida.
-    - **`0.5 (Creativo)`**: Mayor flexibilidad para redacción de informes.
-
-### 4.9. Calculadora de Costos de Producción & Fábrica
-- **Módulo Dedicado**: `/admin/costeo` ([`app/admin/costeo/page.tsx`](file:///c:/fhl_filtros/app/admin/costeo/page.tsx)).
-- **Motor de Cálculo Puro (`lib/costeo.ts`)**:
-  - Réplica matemática exacta del modelo de costeo industrial de FHL Filtros (`Lista base Oct25.xlsx`).
-  - **Parámetros Globales Editables (`parametros_costeo`)**:
-    - *Materia Prima*: Largo/ancho de hoja, gramaje, gramos x hoja, hojas x kilo, costo x kilo de papel.
-    - *Insumos*: Costo lote y divisor de pegamento, bolsitas, etiquetas, laterales de cartón, espuma.
-    - *Empaque & Margen*: Costo caja por lote, divisor de caja, embolsado y margen de ganancia por unidad.
-  - **Datos y Variaciones de Fabricación por Filtro (`costeo_filtros`)**:
-    - **Aprovechamiento de hoja**: Cantidad por ancho ($N$), cantidad por largo ($O$), sobrante ($P$), laterales por hoja ($Q = N \cdot O + P$).
-    - **Plixado ($V$)**: Valor específico por filtro.
-    - **Divisor de Pegamento ($X$)**: Dependiente del tamaño ($1, 2, 2.5, 2.7, 3, 4, 5, 6$).
-    - **Factor de Laterales de Cartón ($AB$)**: $2.1$ para filtros simples, $4.1$ / $4.2$ para dobles (`/2`) y fórmulas compuestas.
-    - **Espuma / Burlete ($AD$)**: Divisores específicos de bobina ($100, $125, $142, $166, $200, $303).
-    - **Goma Eva ($AC$)**: Aplicación selectiva (ej: $300, $2500).
-    - **Cajas y Etiquetas Especiales ($W, Z, AE$)**: Cajas individuales reforzadas (ej: $90 + $230) y etiquetas especiales ($15) en modelos específicos.
-    - **Margen de Ganancia ($AG$)**: Margen base ($430) y márgenes diferenciados por modelo ($516, $537, $559, $602, $645, $718, $827, $860, $924, $938, $950, $1075).
-  - **Multiplicadores de Precio Editables (`multiplicadores_precio`)**:
-    - Canales preconfigurados: *MDP con bolsa* (0.9524), *Mayorista 1* (1.05), *Mayorista 2* (1.10), *Mayorista 3* (1.15), *Comercio* (1.25).
-    - Capacidad de crear nuevos canales o desactivar existentes.
-    - **Volcado a Listas de Precios con 1 click**: Genera o actualiza automáticamente una lista de precios en `/admin/listas-precios` y en el Facturador a partir de los costos calculados.
-  - **Herramientas de Importación / Exportación**:
-    - Importador inteligente de planillas `.xlsx` para actualizar los 114 filtros en bloque.
-    - Exportador a `.xlsx` con todas las columnas de costos, mano de obra y precios finales por canal.
-
-- **Capacidad de Visión Multimodal (Roadmap)**:
-  - Modelos validados en OpenRouter con soporte para imágenes: **`nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`** (391ms) y **`nvidia/nemotron-nano-12b-v2-vl:free`** para futura lectura por OCR de fotos de etiquetas, cajas de filtros físicos y listas de precios escaneadas.
-
-### 4.8. Cargar Nuevo Pedido
-- **Emisión Rápida de Pedidos**: `/admin/facturador` ([`app/admin/facturador/page.tsx`](file:///c:/fhl_filtros/app/admin/facturador/page.tsx)).
-  - Selección de cliente con autocompletado de precios según tarifa especial o precio base del producto.
-  - Buscador inteligente de filtros por código o aplicación.
-  - Acciones con 1 click:
-    1. **Crear Pedido y Descargar PDF**: Persiste el pedido en la base de datos y genera automáticamente el comprobante PDF membretado para enviar al cliente.
-    2. **Crear Pedido**: Persiste el pedido y redirige a su ficha de seguimiento.
-    3. **Vista Previa**: Previsualización en vivo en pantalla o PDF interactivo.
+### 4.6. 🤖 Auditoría de Catálogo con IA (`/admin/auditoria`)
+- **Motor de Ingesta al 100%**: Contexto completo de todos los filtros y matrices de compatibilidad de marcas de vehículos.
+- **Modelos IA Gratis Verificados**:
+  1. `nvidia/nemotron-3-nano-30b-a3b:free`
+  2. `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`
+  3. `openrouter/free` (fallback de seguridad)
+- **Chatbot Asistente Técnico**: Consultas cruzadas, cruce de códigos OEM y generación de tablas comparativas en Markdown.
+- **Auditoría de Planillas Excel**: Sube cualquier planilla externa de listas de precios o proveedores para detectar anomalías, precios desfasados y cruces con FHL.
 
 ---
 
-## 5. Variables de Entorno Requeridas (`.env.local`)
+## 5. Endpoints de API y Seguridad
+
+| Endpoint | Método | Descripción |
+| :--- | :---: | :--- |
+| `/api/auth/login` | `POST` | Autentica credenciales y emite cookie `fhl_admin_session` (HMAC-SHA256) |
+| `/api/auth/logout` | `POST` | Invalida y elimina la cookie de sesión |
+| `/api/auth/check` | `GET` | Valida la validez de la sesión activa |
+| `/api/admin/auditoria-chat` | `POST` | Endpoint de servidor que ejecuta las consultas del chat IA con OpenRouter |
+| `/api/admin/auditoria-excel` | `POST` | Endpoint de servidor que procesa y audita planillas Excel con IA |
+
+### Variables de Entorno (`.env.local`)
 
 ```env
 # Supabase Backend
@@ -332,30 +248,9 @@ npm install
 # Correr servidor de desarrollo
 npm run dev
 
-# Compilar build de producción y validar TypeScript
+# Compilar build de producción y validar TypeScript (21 rutas)
 npm run build
 
-# Ejecutar scripts de base de datos
-node scripts/setup-db.mjs
-node scripts/add-precio-activo.mjs
-node scripts/expand-clientes.mjs
+# Iniciar servidor de producción
+npm start
 ```
-
----
-
-## 7. Estándares de Diseño, UI/UX y Accesibilidad (WCAG 2.1 AA)
-
-### 7.1. Sistema de Bordes y Formas
-- **Contenedores y Tarjetas Principales**: Estandarizados estrictamente en `rounded-lg` (8px), unificando el estilo profesional y estructurado del facturador en todo el sistema.
-- **Botones, Inputs y Modales**: Estandarizados en `rounded-md` (6px) o `rounded` (4px).
-- **Inexistencia de Radios Excesivos**: Se eliminaron completamente clases como `rounded-2xl` y `rounded-3xl` en favor de bordes limpios y modernos.
-- **Cero Emojis**: Toda la interfaz utiliza exclusivamente iconos vectoriales SVG limpios y semánticos.
-
-### 7.2. Accesibilidad (A11y)
-1. **Formularios**: Todos los `<input>`, `<select>` y `<textarea>` cuentan con etiquetas `<label htmlFor="...">` explícitamente conectadas con su correspondiente `id`, o `aria-label` descriptivos.
-2. **Listbox y Combobox Semánticos**: El autocompletador de filtros cuenta con atributos `role="combobox"`, `aria-autocomplete="list"`, `aria-expanded`, `role="listbox"` y `role="option"`.
-3. **Navegación por Pestañas**: Pestañas de perfiles y catálogo estructuradas con `role="tablist"`, `role="tab"`, `aria-selected` y `aria-controls`.
-4. **Modales y Diálogos**: Implementados con `role="dialog"`, `aria-modal="true"`, `aria-labelledby`, foco retenido y cierre mediante tecla `Escape`.
-5. **Navegación por Teclado**: Elementos interactivos con `focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:outline-none`.
-6. **Estados Dinámicos y Alertas**: Mensajes de error y confirmación con `role="alert"` y spinners con `role="status"` o `aria-busy`.
-

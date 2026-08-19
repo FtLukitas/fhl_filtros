@@ -1,109 +1,165 @@
-# Arquitectura del Sistema
+# Arquitectura del Sistema FHL Filtros
 
-## Estado Actual: Catálogo de Solo Lectura
-El sistema se nutre de Supabase. Para optimizar el rendimiento, se utilizan Vistas Materializadas o Tablas de cruce para evitar consultas pesadas.
+Este documento describe la arquitectura global del software, los diagramas de componentes, el flujo de datos y los subsistemas de **FHL Filtros**.
 
-### Funcionalidades
+---
 
-* **Búsqueda por Vehículo** (`BuscadorVehiculo`): Consulta `Tabla B` (marcas/modelos) cruzado con el filtro asociado. Cascada de selects: Marca → Modelo → Buscar.
-* **Búsqueda por Código** (`BuscadorCodigo`): Consulta `Tabla A` (filtros) mediante coincidencias (ilike) normalizando guiones y espacios. Implementa debounce de 350ms para evitar requests excesivos.
-* **Ficha Técnica** (`ModalDetalle`): NO utiliza un estado local booleano aislado. La apertura del modal se controla mediante la URL (`?filtro=CODIGO`). Esto permite compartir enlaces directos a filtros específicos y respeta el historial del navegador.
-  * **Scroll Locking:** Al abrir el modal se bloquea el scroll del `body` (`overflow: hidden`). Al activar el zoom de imagen, se bloquea además el scroll interno del modal. Ambos se restauran al cerrar.
-  * **Rendimiento:** Se evita `backdrop-filter: blur()` en el overlay por su alto costo de GPU en cada frame de scroll. Se usa `will-change: transform` en el contenedor scrolleable para promoverlo a su propia capa de composición.
-  * **Accesibilidad:** El modal incluye `role="dialog"`, `aria-modal="true"` y `aria-label` descriptivo.
+## 1. Topología del Proyecto
 
-### Estructura de Componentes
+La solución está construida sobre **Next.js (App Router)** y **Supabase (PostgreSQL)**, separada en dos áreas funcionales:
 
 ```
-app/
-├── page.tsx                  ← Orquestador (~95 líneas). Gestiona URL state y conecta componentes.
-├── layout.tsx                ← Layout raíz: Navbar + children + Footer + WhatsAppButton
-├── components/
-│   ├── Navbar.tsx            ← Navegación responsive. Usa <Link> con limpieza de ?filtro.
-│   ├── Footer.tsx            ← Footer (Server Component)
-│   ├── WhatsAppButton.tsx    ← Botón flotante global (Server Component)
-│   ├── BuscadorVehiculo.tsx  ← Búsqueda por vehículo (Client Component, estado propio)
-│   ├── BuscadorCodigo.tsx    ← Búsqueda por código con debounce (Client Component, estado propio)
-│   └── ModalDetalle.tsx      ← Ficha técnica con galería/zoom (Client Component, estado propio)
-├── contacto/page.tsx         ← Página de contacto (Server Component)
-└── quienes-somos/page.tsx    ← Página institucional (Server Component)
-
-lib/
-├── supabase.ts               ← Cliente Supabase (singleton)
-└── types.ts                  ← Interfaces TypeScript: Filtro, ResultadoVehiculo
+c:\fhl_filtros\
+├── app/
+│   ├── page.tsx                      ← Catálogo Público (Búsqueda por código o vehículo)
+│   ├── layout.tsx                    ← Layout Público (Navbar + WhatsApp + Footer)
+│   ├── contacto/page.tsx             ← Página de contacto institucional
+│   ├── quienes-somos/page.tsx        ← Página institucional
+│   │
+│   ├── admin/
+│   │   ├── layout.tsx                ← Layout Admin protegido con AdminAuthGuard
+│   │   ├── page.tsx                  ← Dashboard Admin (6 tarjetas de acceso rápido)
+│   │   ├── login/page.tsx            ← Pantalla de Login Full-Screen (HMAC-SHA256)
+│   │   ├── facturador/page.tsx       ← Facturador, Presupuestador, Edición & Borradores
+│   │   ├── pedidos/page.tsx          ← Listado de Pedidos y Cobranzas
+│   │   ├── pedidos/[id]/page.tsx     ← Detalle de Pedido, Pagos y Descarga PDF
+│   │   ├── clientes/page.tsx         ← Listado de Clientes y Resumen de Deudas
+│   │   ├── clientes/[id]/page.tsx    ← Perfil de Cliente, Cuentas Corrientes y Precios Especiales
+│   │   ├── productos/page.tsx        ← Catálogo de Filtros y Autos + Importador Excel Masivo
+│   │   ├── listas-precios/page.tsx   ← Gestión de Listas de Precios Directas e Importador 2-Cols
+│   │   └── auditoria/page.tsx        ← Asistente Técnico y Auditor de Catálogo con IA
+│   │
+│   └── api/
+│       ├── auth/login/route.ts       ← Emisión de Cookie HttpOnly HMAC-SHA256
+│       ├── auth/logout/route.ts      ← Invalidation de Sesión
+│       ├── auth/check/route.ts       ← Verificación Criptográfica de Sesión
+│       ├── admin/auditoria-chat/     ← Chat de IA protegido (OpenRouter Proxy)
+│       └── admin/auditoria-excel/    ← Auditoría masiva de Excel con IA
+│
+├── lib/
+│   ├── supabase.ts                   ← Cliente Singleton de Supabase
+│   ├── types.ts                      ← Modelos de datos TypeScript
+│   └── generarPDF.ts                 ← Generador de Comprobantes PDF (jsPDF)
+└── DOCUMENTACION_SISTEMA.md          ← Manual Técnico Completo
 ```
 
-### Patrón de comunicación entre componentes
+---
 
-`page.tsx` es el orquestador central. No contiene lógica de búsqueda ni UI de modal. Su rol:
-1. Lee `useSearchParams` para saber si hay un `?filtro=CODIGO` en la URL.
-2. Expone `abrirFiltro(codigo)` como callback `onVerDetalle` a los buscadores.
-3. Pasa `filtroDetalle` y `cerrarModal` al `ModalDetalle`.
-
-Cada buscador es autónomo: gestiona su propio estado, queries a Supabase y errores.
-
-## Roadmap / Backlog (A futuro)
-* **Fase 2 - E-commerce Asincrónico:** Implementación de un carrito de compras (Zustand) donde el cliente envía una "Solicitud de Pedido". El stock y el precio no se mostrarán en vivo; un administrador los confirmará manualmente contra su Excel físico antes de emitir un link de pago (Mercado Pago).
-
-### Mapa de Arquitectura Actual
+## 2. Diagrama de Arquitectura Global
 
 ```mermaid
 graph TD
-    %% Estilos Generales del Diagrama
-    classDef datos fill:#f1f5f9,stroke:#64748b,stroke-width:2px;
-    classDef red fill:#eff6ff,stroke:#2563eb,stroke-width:2px;
-    classDef app fill:#fff7ed,stroke:#ea580c,stroke-width:2px;
-    classDef ui fill:#f0fdf4,stroke:#16a34a,stroke-width:2px;
+    %% Estilos
+    classDef client fill:#eff6ff,stroke:#2563eb,stroke-width:2px;
+    classDef server fill:#fff7ed,stroke:#ea580c,stroke-width:2px;
+    classDef db fill:#f0fdf4,stroke:#16a34a,stroke-width:2px;
+    classDef ext fill:#fdf4ff,stroke:#c026d3,stroke-width:2px;
 
-    %% Capa de Datos (Base de Datos)
-    subgraph Capa_Datos ["Capa de Datos: Supabase / PostgreSQL"]
-        T1[("Tabla A: Filtros FHL")]:::datos
-        T2[("Tabla B: Vehículos")]:::datos
-        V1[("Vistas: Marcas y Modelos Únicos")]:::datos
+    subgraph Frontend_Usuario ["Catálogo Público"]
+        CatWeb["Buscador Código & Autos (app/page.tsx)"]:::client
+        Modal["Ficha Técnica Modal (?filtro=ID)"]:::client
     end
 
-    %% Capa de Red (Cliente de API)
-    subgraph Capa_Red ["Capa de Red: PostgREST Client"]
-        API["Cliente de Supabase"]:::red
+    subgraph Frontend_Admin ["Panel de Administración (/admin)"]
+        AuthGuard["AdminAuthGuard (Cookie Check)"]:::client
+        Dash["Dashboard General"]:::client
+        Fact["Facturador & Editor de Pedidos"]:::client
+        Draft["LocalStorage Draft Manager"]:::client
+        Listas["Listas de Precios Directas"]:::client
+        Ped["Pedidos & Cobranzas"]:::client
+        Cli["Clientes & Cuentas Corrientes"]:::client
+        Prod["Catálogo & Importador Excel"]:::client
+        Aud["Auditoría IA"]:::client
     end
 
-    %% Capa de Aplicación (Next.js Lógica)
-    subgraph Capa_App ["Capa de Aplicación: Next.js App Router"]
-        Page["page.tsx: Orquestador URL State"]:::app
-        BV["BuscadorVehiculo"]:::app
-        BC["BuscadorCodigo (debounce 350ms)"]:::app
-        URL{"URL: ?filtro=CODIGO"}:::app
-        Modal["ModalDetalle: Ficha Técnica"]:::app
+    subgraph Backend_Next ["Next.js Server & API Routes"]
+        ApiAuth["/api/auth/* (HMAC Session)"]:::server
+        ApiChat["/api/admin/auditoria-chat"]:::server
+        ApiExcel["/api/admin/auditoria-excel"]:::server
+        PDFEngine["jsPDF Engine (generarPDF.ts)"]:::server
     end
 
-    %% Capa de Usuario (Interfaz)
-    Usuario(("Cliente / Usuario")):::ui
+    subgraph Storage_Supabase ["Supabase Backend"]
+        DB[(PostgreSQL Database)]:::db
+        Bucket[(Storage: 'productos')]:::db
+    end
 
-    %% --- FLUJO DE INFORMACIÓN ---
+    subgraph Servicios_Externos ["Servicios Externos"]
+        OR["OpenRouter AI (Nemotron Nano :free)"]:::ext
+    end
 
-    %% 1. Carga de datos base hacia la API
-    T1 -->|"Select / ilike"| API
-    T2 -->|"Select por Marca/Modelo"| API
-    V1 -->|"Order por nombre"| API
-
-    %% 2. Consumo de la API desde los buscadores
-    API -->|"Popula listaResultados"| BV
-    API -->|"Popula filtrosTexto"| BC
-
-    %% 3. Interacción del Usuario
-    Usuario -->|"1. Selecciona vehículo"| BV
-    Usuario -->|"1. Digita código"| BC
-    BV -->|"2. onVerDetalle(codigo)"| Page
-    BC -->|"2. onVerDetalle(codigo)"| Page
-    Page -->|"3. pushState ?filtro=X"| URL
-    
-    %% 4. El ciclo de la URL como Fuente de Verdad
-    URL -->|"4. useEffect detecta cambio"| Page
-    Page -->|"5. Pide Ficha Única .single"| API
-    API -->|"6. Retorna datos"| Page
-    Page -->|"7. Pasa filtro como prop"| Modal
-    
-    %% 5. Renderizado final y Cierre
-    Modal -->|"8. Muestra Ficha Técnica"| Usuario
-    Usuario -->|"Cerrar: limpia parámetro"| URL
+    %% Relaciones
+    CatWeb --> DB
+    Modal --> DB
+    Fact <--> Draft
+    Fact --> PDFEngine
+    AuthGuard --> ApiAuth
+    Aud --> ApiChat
+    Aud --> ApiExcel
+    ApiChat --> OR
+    ApiExcel --> OR
+    Fact --> DB
+    Listas --> DB
+    Ped --> DB
+    Cli --> DB
+    Prod --> DB
+    Prod --> Bucket
 ```
+
+---
+
+## 3. Flujo de Datos del Facturador & Editor de Pedidos
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Admin as Administrador
+    participant Fact as Facturador (/admin/facturador)
+    participant Local as LocalStorage
+    participant DB as Supabase PostgreSQL
+    participant PDF as Motor jsPDF
+
+    alt Creación o Recuperación de Borrador
+        Admin->>Fact: Abre Facturador
+        Fact->>Local: Comprueba borrador no guardado
+        Local-->>Fact: Borrador encontrado
+        Fact-->>Admin: Banner "¿Restaurar borrador previo?"
+        Admin->>Fact: Restaura o continúa cargando
+    end
+
+    loop Durante la Carga Interactiva
+        Admin->>Fact: Selecciona cliente / agrega filtros
+        Fact->>Local: Auto-guarda estado debounced (400ms)
+        Fact-->>Admin: Muestra "● Autoguardado HH:MM:SS"
+    end
+
+    alt Edición de Pedido Existente (?pedidoId=XYZ)
+        Admin->>Fact: Accede desde link de edición
+        Fact->>DB: Carga pedido y items_pedido
+        DB-->>Fact: Datos originales del pedido
+        Admin->>Fact: Modifica cantidades, filtros o notas
+        Admin->>Fact: Click en "Guardar Cambios"
+        Fact->>DB: UPDATE pedido + DELETE/INSERT items_pedido
+        Fact->>Local: Limpia borrador
+        Fact-->>Admin: Redirige a /admin/pedidos/XYZ con éxito
+    end
+
+    alt Creación Normal de Pedido
+        Admin->>Fact: Click en "Crear Pedido y Descargar PDF"
+        Fact->>DB: INSERT nuevo pedido + INSERT items_pedido
+        Fact->>PDF: Genera Blob URL y descarga comprobante
+        Fact->>Local: Limpia borrador
+        Fact-->>Admin: Redirige a /admin/pedidos/nuevo_id
+    end
+```
+
+---
+
+## 4. Principios de Diseño y Estándares de Código
+
+1. **Server Components por Defecto**: Las páginas cargan estructura estática y solo los árboles que demandan interactividad o estado (`useSearchParams`, inputs, drag & drop) se declaran con `'use client'`.
+2. **Control por URL**: El modal del catálogo público responde a `?filtro=CODIGO`, garantizando deep linking y respetando la navegación del historial del navegador sin estados locales frágiles.
+3. **Seguridad de Secretos**: Ningún token (`OPENROUTER_API_KEY`, `ADMIN_SECRET`) se expone en componentes del cliente. Todo acceso a APIs de IA y autenticación viaja por endpoints de servidor protegidos.
+4. **Resiliencia de Datos**:
+   - Autoguardado reactivo para evitar pérdidas de trabajo por cortes de conexión.
+   - Soporte de papelera (`soft-delete`) en pedidos, clientes, listas de precios y catálogo para prevenir borrados accidentales.

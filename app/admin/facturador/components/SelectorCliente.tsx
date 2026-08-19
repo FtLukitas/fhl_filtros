@@ -100,24 +100,36 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
 
   const guardar = async () => {
     if (!formData.nombre.trim()) {
-      setError('El nombre es obligatorio');
+      setError('El nombre o razón social es obligatorio');
       return;
     }
 
     setGuardando(true);
     setError(null);
 
+    // Combinar datos de contacto en direccion para conservarlos de forma limpia
+    let direccionCompleta = formData.direccion.trim();
+    const contactos: string[] = [];
+    if (formData.telefono.trim()) contactos.push(`Tel: ${formData.telefono.trim()}`);
+    if (formData.email.trim()) contactos.push(`Email: ${formData.email.trim()}`);
+    
+    if (contactos.length > 0) {
+      direccionCompleta = direccionCompleta
+        ? `${direccionCompleta} (${contactos.join(' - ')})`
+        : contactos.join(' - ');
+    }
+
+    const payload = {
+      nombre: formData.nombre.trim(),
+      cuit: formData.cuit.trim() || null,
+      direccion: direccionCompleta || null,
+    };
+
     try {
       if (editandoId) {
         const { error: err } = await supabase
           .from('clientes')
-          .update({
-            nombre: formData.nombre.trim(),
-            cuit: formData.cuit.trim() || null,
-            direccion: formData.direccion.trim() || null,
-            telefono: formData.telefono.trim() || null,
-            email: formData.email.trim() || null,
-          })
+          .update(payload)
           .eq('id', editandoId);
 
         if (err) throw err;
@@ -125,22 +137,17 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
         if (clienteSeleccionado?.id === editandoId) {
           onSeleccionar({
             ...clienteSeleccionado,
-            nombre: formData.nombre.trim(),
-            cuit: formData.cuit.trim() || null,
-            direccion: formData.direccion.trim() || null,
-            telefono: formData.telefono.trim() || null,
-            email: formData.email.trim() || null,
+            nombre: payload.nombre,
+            cuit: payload.cuit,
+            direccion: payload.direccion,
           });
         }
       } else {
         const { data, error: err } = await supabase
           .from('clientes')
           .insert({
-            nombre: formData.nombre.trim(),
-            cuit: formData.cuit.trim() || null,
-            direccion: formData.direccion.trim() || null,
-            telefono: formData.telefono.trim() || null,
-            email: formData.email.trim() || null,
+            ...payload,
+            eliminado: false,
           })
           .select()
           .single();
@@ -153,9 +160,9 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
       setVista('selector');
       setFormData(formVacio);
       setEditandoId(null);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setError('Error al guardar. Intentá de nuevo.');
+      setError(err.message || 'Error al guardar cliente. Intentá de nuevo.');
     } finally {
       setGuardando(false);
     }

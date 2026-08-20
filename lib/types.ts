@@ -1,5 +1,5 @@
 // Tipos centrales del catálogo y panel de administración FHL Filtros
-// Representan las estructuras de datos que vienen de Supabase
+// Representan las estructuras de datos sincronizadas con Supabase
 
 export interface Filtro {
   id: number;
@@ -30,25 +30,22 @@ export interface ResultadoVehiculo {
   filtro_asociado: string;
 }
 
-// --- Listas de Precios ---
+// --- Listas de Precios Directas ---
 
-export type TipoAjusteLista = 'porcentaje' | 'fijo' | 'excel' | 'costeo';
-export type TipoRedondeo = 'ninguno' | 'entero' | 'decena' | 'centena';
+export type TipoAjusteLista = 'excel' | 'porcentaje' | 'fijo';
 
 export interface ListaPrecio {
   id: string;
   nombre: string;
   descripcion?: string | null;
   tipo_ajuste: TipoAjusteLista;
-  canal_costeo?: string | null;
-  redondeo?: TipoRedondeo;
-  descuento_adicional?: number;
   porcentaje: number;
   activa: boolean;
   es_predeterminada: boolean;
   eliminado?: boolean;
   eliminado_at?: string | null;
   total_items?: number;
+  total_clientes?: number;
   created_at: string;
 }
 
@@ -60,7 +57,7 @@ export interface ItemListaPrecio {
   created_at: string;
 }
 
-// --- Clientes ---
+// --- Clientes & Cuentas Corrientes ---
 
 export interface Cliente {
   id: string;
@@ -90,9 +87,19 @@ export interface PrecioCliente {
   updated_at: string;
 }
 
-// --- Facturación, Pedidos, Pagos y Saldo ---
+export interface ResumenFinancieroCliente {
+  totalComprado: number;
+  totalPagado: number;
+  totalDeuda: number;
+  totalSaldoAFavor: number;
+  pedidosPendientes: number;
+  pedidosImpagos: number;
+}
+
+// --- Facturación, Pedidos, Pagos y Saldo a Favor ---
 
 export type EstadoPedido = 'pendiente' | 'confirmado' | 'entregado' | 'cancelado';
+export type EstadoPagoPedido = 'impago' | 'parcial' | 'saldado';
 export type EstadoPresupuesto = 'emitido' | 'convertido' | 'vencido';
 export type MetodoPago = 'efectivo' | 'transferencia' | 'cheque' | 'mercadopago' | 'saldo_a_favor';
 export type TipoMovimientoSaldo = 'excedente' | 'aplicado' | 'ajuste_manual' | 'anticipo' | 'deduccion';
@@ -164,51 +171,4 @@ export interface MovimientoSaldo {
   nota?: string | null;
   descripcion?: string | null;
   fecha: string;
-}
-
-// --- Costeo de Producción ---
-
-export interface ParametroCosteo {
-  id: number;
-  clave: string;
-  nombre: string;
-  valor: number;
-  divisor: number;
-  unidad: string;
-  grupo: string;
-  orden: number;
-  updated_at: string;
-}
-
-export interface CosteoFiltro {
-  id: number;
-  codigo_fhl: string;
-  cantidad_x_ancho: number;
-  cantidad_x_largo: number;
-  cantidad_x_sobrante: number;
-  mano_obra_x_corte: number;
-  costo_plixado: number;
-  costo_armado?: number;
-  divisor_pegamento: number;
-  factor_carton?: number;
-  costo_caja_especial?: number;
-  costo_caja?: number;
-  costo_etiqueta?: number;
-  usa_goma_eva: boolean;
-  costo_goma_eva: number;
-  usa_espuma: boolean;
-  costo_espuma: number;
-  ganancia?: number;
-  costo_mayorista_excel?: number;
-  updated_at: string;
-}
-
-export interface MultiplicadorPrecio {
-  id: number;
-  clave: string;
-  nombre: string;
-  factor: number;
-  orden: number;
-  activo: boolean;
-  updated_at: string;
 }

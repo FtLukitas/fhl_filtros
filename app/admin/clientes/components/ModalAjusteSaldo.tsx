@@ -10,20 +10,22 @@ interface ModalAjusteSaldoProps {
     id: string;
     nombre: string;
   } | null;
-  saldoActual: number;
+  deudaActual?: number;
+  saldoActual?: number;
   onGuardado: () => void;
 }
 
-type ModoAjuste = 'fijar' | 'sumar' | 'restar';
+type ModoAjuste = 'cargar_deuda' | 'sumar_credito' | 'fijar_deuda';
 
 export default function ModalAjusteSaldo({
   abierto,
   onCerrar,
   cliente,
-  saldoActual,
+  deudaActual = 0,
+  saldoActual = 0,
   onGuardado,
 }: ModalAjusteSaldoProps) {
-  const [modo, setModo] = useState<ModoAjuste>('fijar');
+  const [modo, setModo] = useState<ModoAjuste>('cargar_deuda');
   const [montoInput, setMontoInput] = useState('');
   const [concepto, setConcepto] = useState('');
   const [fecha, setFecha] = useState('');
@@ -32,51 +34,57 @@ export default function ModalAjusteSaldo({
 
   useEffect(() => {
     if (abierto && cliente) {
-      setModo('fijar');
-      setMontoInput(saldoActual > 0 ? saldoActual.toString() : '0');
-      setConcepto('Ajuste manual de saldo');
-      // Fecha actual en formato YYYY-MM-DD
+      setModo('cargar_deuda');
+      setMontoInput('');
+      setConcepto('Saldo deudor anterior');
       const hoy = new Date().toISOString().split('T')[0];
       setFecha(hoy);
       setError(null);
     }
-  }, [abierto, cliente, saldoActual]);
+  }, [abierto, cliente]);
 
   if (!abierto || !cliente) return null;
 
   const montoNumerico = parseFloat(montoInput) || 0;
 
-  // Cálculo del nuevo saldo y del delta (diferencia)
-  let nuevoSaldo = saldoActual;
-  let deltaMonto = 0; // lo que se guardará en movimientos_saldo
+  // Cálculo del impacto financiero
+  let deltaMonto = 0; // lo que se insertará en movimientos_saldo
+  let deudaResultante = deudaActual;
+  let saldoResultante = saldoActual;
 
-  if (modo === 'fijar') {
-    nuevoSaldo = Math.max(0, montoNumerico);
-    deltaMonto = nuevoSaldo - saldoActual;
-  } else if (modo === 'sumar') {
-    deltaMonto = Math.max(0, montoNumerico);
-    nuevoSaldo = saldoActual + deltaMonto;
-  } else if (modo === 'restar') {
-    deltaMonto = -Math.max(0, montoNumerico);
-    nuevoSaldo = Math.max(0, saldoActual + deltaMonto);
+  if (modo === 'cargar_deuda') {
+    deltaMonto = -Math.abs(montoNumerico);
+    deudaResultante = deudaActual + Math.abs(montoNumerico);
+    saldoResultante = saldoActual;
+  } else if (modo === 'sumar_credito') {
+    deltaMonto = Math.abs(montoNumerico);
+    deudaResultante = deudaActual;
+    saldoResultante = saldoActual + Math.abs(montoNumerico);
+  } else if (modo === 'fijar_deuda') {
+    // Si el usuario quiere fijar la deuda total en X:
+    const deudaDeseada = Math.max(0, montoNumerico);
+    const diferencia = deudaDeseada - deudaActual;
+    deltaMonto = -diferencia;
+    deudaResultante = deudaDeseada;
+    saldoResultante = saldoActual;
   }
 
   const sugerenciasConcepto =
-    modo === 'sumar'
-      ? ['Anticipo en efectivo', 'Nota de crédito', 'Bonificación especial', 'Transferencia bancaria']
-      : modo === 'restar'
-      ? ['Devolución de saldo', 'Compensación contable', 'Ajuste por corrección', 'Retiro de crédito']
-      : ['Ajuste manual de saldo', 'Saldo inicial de cuenta', 'Regularización contable'];
+    modo === 'cargar_deuda'
+      ? ['Saldo deudor anterior', 'Deuda inicial convenida', 'Recargo administrativo', 'Cheque rechazado', 'Ajuste de deuda']
+      : modo === 'sumar_credito'
+      ? ['Anticipo en efectivo', 'Transferencia recibida', 'Nota de crédito', 'Bonificación especial']
+      : ['Regularización contable', 'Ajuste a saldo convenido', 'Auditoría de cuenta'];
 
   const handleGuardar = async (e: React.FormEvent) => {
     e.preventDefault();
     if (deltaMonto === 0) {
-      setError('El ajuste no genera ningún cambio en el saldo del cliente');
+      setError('Por favor ingresá un monto mayor a 0 para el ajuste');
       return;
     }
 
     if (!concepto.trim()) {
-      setError('Por favor especificá un motivo o concepto para el ajuste de saldo');
+      setError('Por favor especificá un motivo o concepto para el movimiento');
       return;
     }
 
@@ -84,15 +92,10 @@ export default function ModalAjusteSaldo({
     setError(null);
 
     try {
-      // Determinamos el tipo de movimiento
       const tipoMovimiento =
-        deltaMonto > 0
-          ? modo === 'sumar'
-            ? 'excedente'
-            : 'ajuste_manual'
-          : modo === 'restar'
-          ? 'aplicado'
-          : 'ajuste_manual';
+        deltaMonto < 0
+          ? 'ajuste_manual'
+          : 'anticipo';
 
       const fechaISO = fecha ? new Date(`${fecha}T12:00:00Z`).toISOString() : new Date().toISOString();
 
@@ -109,8 +112,8 @@ export default function ModalAjusteSaldo({
       onGuardado();
       onCerrar();
     } catch (err: any) {
-      console.error('Error al guardar ajuste de saldo:', err);
-      setError(err.message || 'No se pudo guardar el ajuste de saldo.');
+      console.error('Error al guardar movimiento de cuenta corriente:', err);
+      setError(err.message || 'No se pudo guardar el ajuste.');
     } finally {
       setGuardando(false);
     }
@@ -126,8 +129,10 @@ export default function ModalAjusteSaldo({
       >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
-          <div className="flex items-center gap-2">
-            <div className="p-2 bg-blue-50 text-blue-900 rounded-md">
+          <div className="flex items-center gap-2.5">
+            <div className={`p-2 rounded-md ${
+              modo === 'cargar_deuda' ? 'bg-red-50 text-red-700' : modo === 'sumar_credito' ? 'bg-emerald-50 text-emerald-800' : 'bg-blue-50 text-blue-900'
+            }`}>
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                 <rect x="2" y="4" width="20" height="16" rx="2" />
                 <line x1="12" y1="8" x2="12" y2="16" />
@@ -139,7 +144,7 @@ export default function ModalAjusteSaldo({
                 Cuenta Corriente
               </span>
               <h2 id="modal-saldo-title" className="text-base font-black text-slate-900">
-                Editar Saldo a Favor
+                Ajustar Deuda o Saldo
               </h2>
             </div>
           </div>
@@ -157,24 +162,36 @@ export default function ModalAjusteSaldo({
           </button>
         </div>
 
-        {/* Cliente y Saldo Actual */}
-        <div className="bg-slate-50 p-3.5 rounded-lg border border-slate-200/80 mb-4 flex items-center justify-between">
+        {/* Cliente y Estado Financiero Actual */}
+        <div className="bg-slate-50 p-3.5 rounded-lg border border-slate-200/80 mb-4 grid grid-cols-2 gap-3 text-xs">
           <div>
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
               Cliente
             </span>
-            <span className="text-xs font-bold text-slate-900 block truncate max-w-[240px]">
+            <span className="font-bold text-slate-900 block truncate" title={cliente.nombre}>
               {cliente.nombre}
             </span>
           </div>
 
-          <div className="text-right">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-              Saldo Actual
-            </span>
-            <span className="text-sm font-black font-mono text-blue-900">
-              ${saldoActual.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
-            </span>
+          <div className="text-right flex items-center justify-end gap-3">
+            <div>
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                Deuda Actual
+              </span>
+              <span className={`font-black font-mono text-sm ${deudaActual > 0 ? 'text-red-600' : 'text-slate-700'}`}>
+                ${deudaActual.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+              </span>
+            </div>
+            {saldoActual > 0 && (
+              <div className="border-l border-slate-200 pl-3">
+                <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider block">
+                  A Favor
+                </span>
+                <span className="font-black font-mono text-sm text-emerald-700">
+                  ${saldoActual.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+                </span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -183,47 +200,47 @@ export default function ModalAjusteSaldo({
           <button
             type="button"
             onClick={() => {
-              setModo('fijar');
-              setMontoInput(saldoActual > 0 ? saldoActual.toString() : '0');
-              setConcepto('Ajuste manual de saldo');
+              setModo('cargar_deuda');
+              setMontoInput('');
+              setConcepto('Saldo deudor anterior');
             }}
             className={`py-2 rounded-md transition-all cursor-pointer text-center ${
-              modo === 'fijar'
-                ? 'bg-white text-blue-900 shadow-xs'
+              modo === 'cargar_deuda'
+                ? 'bg-red-600 text-white shadow-xs'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            Fijar Saldo
+            + Sumar a Deuda
           </button>
           <button
             type="button"
             onClick={() => {
-              setModo('sumar');
+              setModo('sumar_credito');
               setMontoInput('');
               setConcepto('Anticipo de pago');
             }}
             className={`py-2 rounded-md transition-all cursor-pointer text-center ${
-              modo === 'sumar'
-                ? 'bg-white text-green-700 shadow-xs'
+              modo === 'sumar_credito'
+                ? 'bg-emerald-700 text-white shadow-xs'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            + Sumar Crédito
+            + Saldo a Favor
           </button>
           <button
             type="button"
             onClick={() => {
-              setModo('restar');
-              setMontoInput('');
-              setConcepto('Devolución de saldo');
+              setModo('fijar_deuda');
+              setMontoInput(deudaActual.toString());
+              setConcepto('Regularización contable');
             }}
             className={`py-2 rounded-md transition-all cursor-pointer text-center ${
-              modo === 'restar'
-                ? 'bg-white text-amber-700 shadow-xs'
+              modo === 'fijar_deuda'
+                ? 'bg-blue-900 text-white shadow-xs'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            - Restar / Deducir
+            Fijar Deuda
           </button>
         </div>
 
@@ -233,9 +250,9 @@ export default function ModalAjusteSaldo({
           {/* Monto */}
           <div>
             <label htmlFor="monto-ajuste" className="block text-xs font-bold text-slate-700 mb-1">
-              {modo === 'fijar' && 'Nuevo Saldo Final Exacto ($ ARS):'}
-              {modo === 'sumar' && 'Monto a Agregar al Saldo ($ ARS):'}
-              {modo === 'restar' && 'Monto a Deducir del Saldo ($ ARS):'}
+              {modo === 'cargar_deuda' && 'Monto a Sumar a la Deuda ($ ARS):'}
+              {modo === 'sumar_credito' && 'Monto de Saldo a Favor a Acreditar ($ ARS):'}
+              {modo === 'fijar_deuda' && 'Deuda Total Resultante Deseada ($ ARS):'}
             </label>
             <div className="relative">
               <span className="absolute left-3 top-2.5 text-xs font-bold text-slate-400 font-mono">$</span>
@@ -253,31 +270,35 @@ export default function ModalAjusteSaldo({
             </div>
           </div>
 
-          {/* Previsualización del Impacto */}
+          {/* Previsualización del Impacto en la Deuda / Saldo */}
           <div
-            className={`p-3 rounded-md border text-xs flex items-center justify-between ${
-              deltaMonto > 0
-                ? 'bg-green-50/70 border-green-200 text-green-950'
-                : deltaMonto < 0
-                ? 'bg-amber-50/70 border-amber-200 text-amber-950'
+            className={`p-3.5 rounded-md border text-xs flex items-center justify-between ${
+              modo === 'cargar_deuda' || (modo === 'fijar_deuda' && deudaResultante > deudaActual)
+                ? 'bg-red-50/80 border-red-200 text-red-950'
+                : modo === 'sumar_credito'
+                ? 'bg-emerald-50/80 border-emerald-200 text-emerald-950'
                 : 'bg-slate-50 border-slate-200 text-slate-700'
             }`}
           >
             <div>
-              <span className="font-semibold block">
-                {deltaMonto > 0 ? 'Movimiento: Crédito a Favor (+)' : deltaMonto < 0 ? 'Movimiento: Deducción (-)' : 'Sin Variación'}
+              <span className="font-bold block text-[11px] uppercase tracking-wider">
+                {modo === 'cargar_deuda' && '⚠️ Aumento de Deuda'}
+                {modo === 'sumar_credito' && '✓ Crédito a Favor'}
+                {modo === 'fijar_deuda' && 'Ajuste de Deuda Total'}
               </span>
-              <span className="text-[11px] opacity-80 font-mono">
-                {deltaMonto >= 0 ? `+ $${deltaMonto.toLocaleString('es-AR', { minimumFractionDigits: 2 })}` : `- $${Math.abs(deltaMonto).toLocaleString('es-AR', { minimumFractionDigits: 2 })}`}
+              <span className="text-xs font-medium">
+                {modo === 'cargar_deuda' && `Se sumarán $${montoNumerico.toLocaleString('es-AR')} a la deuda`}
+                {modo === 'sumar_credito' && `Se acreditarán $${montoNumerico.toLocaleString('es-AR')} a favor`}
+                {modo === 'fijar_deuda' && `La deuda total quedará fijada en $${deudaResultante.toLocaleString('es-AR')}`}
               </span>
             </div>
 
-            <div className="text-right">
+            <div className="text-right border-l pl-3 border-slate-200">
               <span className="text-[10px] uppercase tracking-wider font-bold block opacity-75">
-                Saldo Resultante
+                Deuda Total Resultante
               </span>
-              <span className="text-sm font-black font-mono">
-                ${nuevoSaldo.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+              <span className="text-base font-black font-mono text-red-600">
+                ${deudaResultante.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
               </span>
             </div>
           </div>
@@ -285,14 +306,14 @@ export default function ModalAjusteSaldo({
           {/* Concepto / Motivo */}
           <div>
             <label htmlFor="concepto-ajuste" className="block text-xs font-bold text-slate-700 mb-1">
-              Motivo o Concepto del Ajuste:
+              Motivo / Concepto del Registro:
             </label>
             <input
               id="concepto-ajuste"
               type="text"
               value={concepto}
               onChange={(e) => setConcepto(e.target.value)}
-              placeholder="Ej: Anticipo en efectivo, Nota de crédito #123..."
+              placeholder="Ej: Saldo deudor anterior, Anticipo en efectivo..."
               required
               className="w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-900"
             />
@@ -315,7 +336,7 @@ export default function ModalAjusteSaldo({
           {/* Fecha */}
           <div>
             <label htmlFor="fecha-ajuste" className="block text-xs font-bold text-slate-700 mb-1">
-              Fecha del Movimiento:
+              Fecha del Registro:
             </label>
             <input
               id="fecha-ajuste"
@@ -347,7 +368,11 @@ export default function ModalAjusteSaldo({
             <button
               type="submit"
               disabled={guardando || deltaMonto === 0}
-              className="px-5 py-2 bg-blue-900 hover:bg-blue-800 text-white font-bold text-xs rounded-md transition-colors shadow-xs disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
+              className={`px-5 py-2 text-white font-bold text-xs rounded-md transition-colors shadow-xs disabled:opacity-50 cursor-pointer flex items-center gap-1.5 ${
+                modo === 'cargar_deuda'
+                  ? 'bg-red-600 hover:bg-red-700'
+                  : 'bg-blue-900 hover:bg-blue-800'
+              }`}
             >
               {guardando ? (
                 <>
@@ -355,9 +380,7 @@ export default function ModalAjusteSaldo({
                   <span>Guardando...</span>
                 </>
               ) : (
-                <>
-                  <span>Guardar Saldo</span>
-                </>
+                <span>{modo === 'cargar_deuda' ? 'Confirmar y Sumar a Deuda' : 'Guardar Registro'}</span>
               )}
             </button>
           </div>

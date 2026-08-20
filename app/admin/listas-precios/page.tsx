@@ -14,6 +14,7 @@ import ModalVerPreciosLista from './components/ModalVerPreciosLista';
 export default function ListasPreciosPage() {
   const [listas, setListas] = useState<ListaPrecio[]>([]);
   const [conteosItems, setConteosItems] = useState<Record<string, number>>({});
+  const [conteosClientes, setConteosClientes] = useState<Record<string, number>>({});
   const [filtrosMuestra, setFiltrosMuestra] = useState<Filtro[]>([]);
   const [cargando, setCargando] = useState(true);
   const [guardando, setGuardando] = useState(false);
@@ -65,10 +66,11 @@ export default function ListasPreciosPage() {
   const cargarDatos = useCallback(async () => {
     setCargando(true);
     try {
-      const [resListas, resFiltros, resItems] = await Promise.all([
+      const [resListas, resFiltros, resItems, resClientes] = await Promise.all([
         supabase.from('listas_precios').select('*').order('created_at', { ascending: true }),
         supabase.from('Tabla A').select('*').eq('eliminado', false).limit(50),
         supabase.from('items_lista_precio').select('lista_id, codigo_fhl'),
+        supabase.from('clientes').select('lista_precio_id').eq('eliminado', false),
       ]);
 
       const dataListas = (resListas.data as ListaPrecio[]) || [];
@@ -82,6 +84,17 @@ export default function ListasPreciosPage() {
         });
       }
       setConteosItems(conteos);
+
+      // Conteo de clientes por lista
+      const clientesMap: Record<string, number> = {};
+      if (resClientes.data) {
+        resClientes.data.forEach((c: any) => {
+          if (c.lista_precio_id) {
+            clientesMap[c.lista_precio_id] = (clientesMap[c.lista_precio_id] || 0) + 1;
+          }
+        });
+      }
+      setConteosClientes(clientesMap);
 
       setListas(dataListas);
       setFiltrosMuestra(dataFiltros);
@@ -450,22 +463,29 @@ export default function ListasPreciosPage() {
                       </p>
 
                       {/* Info Técnica / Valores */}
-                      <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 space-y-2 mb-4">
+                      <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 space-y-1.5 mb-4 text-xs">
                         {esPorcentaje ? (
-                          <div className="flex items-center justify-between text-xs">
+                          <div className="flex items-center justify-between">
                             <span className="text-slate-500 font-medium">Ajuste sobre Catálogo:</span>
                             <span className="font-black font-mono text-purple-900">
                               {Number(l.porcentaje) >= 0 ? `+${l.porcentaje}%` : `${l.porcentaje}%`}
                             </span>
                           </div>
                         ) : (
-                          <div className="flex items-center justify-between text-xs">
+                          <div className="flex items-center justify-between">
                             <span className="text-slate-500 font-medium">Filtros con precio propio:</span>
                             <span className="font-black font-mono text-emerald-900">
                               {totalItems} producto(s)
                             </span>
                           </div>
                         )}
+
+                        <div className="flex items-center justify-between pt-1 border-t border-slate-200/60">
+                          <span className="text-slate-500 font-medium">Clientes vinculados:</span>
+                          <span className="font-bold text-slate-700">
+                            {conteosClientes[l.id] || 0} cliente(s)
+                          </span>
+                        </div>
                       </div>
                     </div>
 

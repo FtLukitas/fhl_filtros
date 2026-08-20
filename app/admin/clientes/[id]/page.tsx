@@ -79,8 +79,6 @@ export default function ClienteDetallePage({ params }: PageProps) {
       setCliente(cl);
       setFormNombre(cl.nombre || '');
       setFormCuit(cl.cuit || '');
-      setFormEmail(cl.email || '');
-      setFormTelefono(cl.telefono || '');
       setFormDireccion(cl.direccion || '');
       setFormCiudad(cl.ciudad || '');
       setFormProvincia(cl.provincia || '');
@@ -89,7 +87,6 @@ export default function ClienteDetallePage({ params }: PageProps) {
       setFormDescuento(cl.descuento_predeterminado || 0);
       setFormPlazoPago(cl.plazo_pago || 'Contado');
       setFormListaPrecioId(cl.lista_precio_id || '');
-      setFormNotas(cl.notas || '');
 
       // 2. Pedidos con ítems
       const { data: dbPedidos } = await supabase
@@ -151,17 +148,17 @@ export default function ClienteDetallePage({ params }: PageProps) {
     pagosPorPedido.set(p.pedido_id, (pagosPorPedido.get(p.pedido_id) || 0) + Number(p.monto || 0));
   });
 
-  const deudaTotal = pedidos
+  const deudaPedidos = pedidos
     .filter((p) => p.estado !== 'cancelado')
     .reduce((sum, p) => {
       const pagado = pagosPorPedido.get(p.id) || 0;
       return sum + Math.max(0, Number(p.total || 0) - pagado);
     }, 0);
 
-  const saldoAFavor = Math.max(
-    0,
-    movimientosSaldo.reduce((sum, m) => sum + Number(m.monto || 0), 0)
-  );
+  const balanceMovimientos = movimientosSaldo.reduce((sum, m) => sum + Number(m.monto || 0), 0);
+  const saldoAFavor = Math.max(0, balanceMovimientos);
+  const deudaAjustes = Math.max(0, -balanceMovimientos);
+  const deudaTotal = deudaPedidos + deudaAjustes;
 
   // Eliminar un movimiento de saldo individual
   const handleEliminarMovimientoSaldo = async (movId: string) => {
@@ -876,46 +873,68 @@ export default function ClienteDetallePage({ params }: PageProps) {
             </div>
           )}
 
-          {/* TAB 3: SALDO A FAVOR */}
+          {/* TAB 3: SALDO Y CUENTA CORRIENTE */}
           {tabActivo === 'saldo' && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between gap-2 flex-wrap bg-slate-50 p-3 rounded-lg border border-slate-200/80">
-                <div>
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                    Estado de Saldo
-                  </span>
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-sm font-bold text-slate-700">Saldo Disponible:</span>
-                    <span className="text-lg font-black font-mono text-blue-900">
+              <div className="flex items-center justify-between gap-4 flex-wrap bg-slate-50 p-4 rounded-lg border border-slate-200/80">
+                <div className="flex items-center gap-6 flex-wrap">
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                      Saldo a Favor Disponible
+                    </span>
+                    <span className="text-lg font-black font-mono text-emerald-700">
                       ${saldoAFavor.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+
+                  {deudaAjustes > 0 && (
+                    <div className="border-l border-slate-200 pl-4">
+                      <span className="text-[10px] font-bold text-red-500 uppercase tracking-wider block">
+                        Deuda por Ajustes / Cargos
+                      </span>
+                      <span className="text-lg font-black font-mono text-red-600">
+                        ${deudaAjustes.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="border-l border-slate-200 pl-4">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                      Deuda Total Consolidada
+                    </span>
+                    <span className={`text-lg font-black font-mono ${deudaTotal > 0 ? 'text-red-600' : 'text-slate-700'}`}>
+                      ${deudaTotal.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
                     </span>
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => setModalSaldo(true)}
-                  className="px-3.5 py-2 bg-blue-900 hover:bg-blue-800 text-white rounded-md text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
-                    <line x1="12" y1="5" x2="12" y2="19" />
-                    <line x1="5" y1="12" x2="19" y2="12" />
-                  </svg>
-                  <span>Cargar / Ajustar Saldo</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setModalSaldo(true)}
+                    className="px-3.5 py-2 bg-blue-900 hover:bg-blue-800 text-white rounded-md text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+                      <rect x="2" y="4" width="20" height="16" rx="2" />
+                      <line x1="12" y1="8" x2="12" y2="16" />
+                      <line x1="8" y1="12" x2="16" y2="12" />
+                    </svg>
+                    <span>Cargar Deuda / Saldo</span>
+                  </button>
+                </div>
               </div>
 
               {movimientosSaldo.length === 0 ? (
                 <div className="p-8 text-center bg-white border border-slate-200 rounded-lg">
                   <p className="text-xs text-slate-400 italic mb-3">
-                    Este cliente no registra movimientos de crédito a favor.
+                    Este cliente no registra movimientos manuales de cuenta corriente.
                   </p>
                   <button
                     type="button"
                     onClick={() => setModalSaldo(true)}
                     className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-md transition-colors cursor-pointer"
                   >
-                    + Registrar primer saldo
+                    + Registrar primer ajuste
                   </button>
                 </div>
               ) : (
@@ -924,81 +943,86 @@ export default function ClienteDetallePage({ params }: PageProps) {
                     <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider">
                       <tr>
                         <th className="p-3">Fecha</th>
-                        <th className="p-3">Tipo</th>
+                        <th className="p-3">Tipo de Movimiento</th>
                         <th className="p-3">Pedido Vinculado</th>
-                        <th className="p-3">Descripción</th>
+                        <th className="p-3">Descripción / Motivo</th>
                         <th className="p-3 text-right">Monto</th>
                         <th className="p-3 text-right">Acción</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {movimientosSaldo.map((m) => (
-                        <tr key={m.id} className="hover:bg-slate-50/60 transition-colors">
-                          <td className="p-3 text-slate-600">
-                            {new Date(m.fecha).toLocaleDateString('es-AR', {
-                              day: '2-digit',
-                              month: '2-digit',
-                              year: 'numeric',
-                              hour: '2-digit',
-                              minute: '2-digit',
-                            })}
-                          </td>
-                          <td className="p-3">
-                            <span
-                              className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                                m.tipo === 'excedente'
-                                  ? 'bg-blue-100 text-blue-800'
-                                  : m.tipo === 'ajuste_manual'
-                                  ? 'bg-purple-100 text-purple-800'
-                                  : 'bg-amber-100 text-amber-800'
+                      {movimientosSaldo.map((m) => {
+                        const esCredito = Number(m.monto) > 0;
+                        const esDeuda = Number(m.monto) < 0;
+
+                        return (
+                          <tr key={m.id} className="hover:bg-slate-50/60 transition-colors">
+                            <td className="p-3 text-slate-600">
+                              {new Date(m.fecha).toLocaleDateString('es-AR', {
+                                day: '2-digit',
+                                month: '2-digit',
+                                year: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </td>
+                            <td className="p-3">
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                                  esCredito
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : m.tipo === 'aplicado'
+                                    ? 'bg-blue-100 text-blue-800'
+                                    : 'bg-red-100 text-red-800'
+                                }`}
+                              >
+                                {esCredito
+                                  ? 'Crédito a Favor (+)'
+                                  : m.tipo === 'aplicado'
+                                  ? 'Saldo Aplicado a Pedido (-)'
+                                  : 'Cargo / Deuda Manual (-)'}
+                              </span>
+                            </td>
+                            <td className="p-3">
+                              {(m.pedido_id || m.referencia_pedido_id) ? (
+                                <Link
+                                  href={`/admin/pedidos/${m.pedido_id || m.referencia_pedido_id}`}
+                                  className="font-bold text-blue-900 font-mono hover:underline"
+                                >
+                                  #{(m.pedido_id || m.referencia_pedido_id)?.slice(0, 8)}
+                                </Link>
+                              ) : (
+                                '—'
+                              )}
+                            </td>
+                            <td className="p-3 text-slate-600 font-medium">
+                              {m.descripcion || m.nota || '—'}
+                            </td>
+                            <td
+                              className={`p-3 text-right font-black font-mono text-sm ${
+                                esCredito ? 'text-emerald-700' : 'text-red-600'
                               }`}
                             >
-                              {m.tipo === 'excedente'
-                                ? 'Excedente (Crédito)'
-                                : m.tipo === 'ajuste_manual'
-                                ? 'Ajuste Manual'
-                                : 'Saldo Aplicado'}
-                            </span>
-                          </td>
-                          <td className="p-3">
-                            {(m.pedido_id || m.referencia_pedido_id) ? (
-                              <Link
-                                href={`/admin/pedidos/${m.pedido_id || m.referencia_pedido_id}`}
-                                className="font-bold text-blue-900 font-mono hover:underline"
+                              {esCredito ? '+' : ''}
+                              ${Number(m.monto).toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+                            </td>
+                            <td className="p-3 text-right">
+                              <button
+                                type="button"
+                                onClick={() => handleEliminarMovimientoSaldo(m.id)}
+                                className="text-slate-400 hover:text-red-600 p-1.5 rounded hover:bg-slate-100 transition-colors cursor-pointer"
+                                title="Eliminar este movimiento"
+                                aria-label="Eliminar movimiento de saldo"
                               >
-                                #{(m.pedido_id || m.referencia_pedido_id)?.slice(0, 8)}
-                              </Link>
-                            ) : (
-                              '—'
-                            )}
-                          </td>
-                          <td className="p-3 text-slate-600 italic">
-                            {m.descripcion || m.nota || '—'}
-                          </td>
-                          <td
-                            className={`p-3 text-right font-black font-mono text-sm ${
-                              Number(m.monto) >= 0 ? 'text-blue-900' : 'text-slate-600'
-                            }`}
-                          >
-                            {Number(m.monto) >= 0 ? '+' : ''}
-                            ${Number(m.monto).toLocaleString('es-AR', { minimumFractionDigits: 2 })}
-                          </td>
-                          <td className="p-3 text-right">
-                            <button
-                              type="button"
-                              onClick={() => handleEliminarMovimientoSaldo(m.id)}
-                              className="text-slate-400 hover:text-red-600 p-1.5 rounded hover:bg-slate-100 transition-colors cursor-pointer"
-                              title="Eliminar este movimiento de saldo"
-                              aria-label="Eliminar movimiento de saldo"
-                            >
-                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                                <polyline points="3 6 5 6 21 6" />
-                                <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
-                              </svg>
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                                  <polyline points="3 6 5 6 21 6" />
+                                  <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+                                </svg>
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -1237,7 +1261,7 @@ export default function ClienteDetallePage({ params }: PageProps) {
                     <option value="">-- Automática / Predeterminada del Sistema --</option>
                     {listasPrecios.map((lp) => (
                       <option key={lp.id} value={lp.id}>
-                        {lp.nombre} {lp.tipo_ajuste === 'costeo' ? `(Costeo: ${lp.canal_costeo || 'Fábrica'})` : lp.tipo_ajuste === 'excel' ? '(Planilla Excel)' : lp.porcentaje !== 0 ? `(${lp.porcentaje > 0 ? `+${lp.porcentaje}%` : `${lp.porcentaje}%`})` : '(Base)'} {lp.es_predeterminada ? '(Predeterminada)' : ''}
+                        {lp.nombre} {lp.es_predeterminada ? '(Predeterminada)' : ''}
                       </option>
                     ))}
                   </select>
@@ -1362,9 +1386,10 @@ export default function ClienteDetallePage({ params }: PageProps) {
           abierto={modalSaldo}
           onCerrar={() => setModalSaldo(false)}
           cliente={{ id: cliente.id, nombre: cliente.nombre }}
+          deudaActual={deudaTotal}
           saldoActual={saldoAFavor}
           onGuardado={async () => {
-            notificarOk('Saldo a favor actualizado con éxito');
+            notificarOk('Cuenta corriente actualizada con éxito');
             await cargarTodo();
           }}
         />

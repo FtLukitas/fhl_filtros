@@ -10,7 +10,8 @@ export default function PedidosAdminPage() {
   const [pagosMap, setPagosMap] = useState<Map<string, number>>(new Map());
   const [cargando, setCargando] = useState(true);
   const [busqueda, setBusqueda] = useState('');
-  const [filtroEstado, setFiltroEstado] = useState<EstadoPedido | 'todos' | 'con_deuda'>('todos');
+  const [filtroEstado, setFiltroEstado] = useState<EstadoPedido | 'todos'>('todos');
+  const [filtroPago, setFiltroPago] = useState<'todos' | 'con_deuda' | 'saldados'>('todos');
   const [verEliminados, setVerEliminados] = useState(false);
 
   const cargarPedidos = useCallback(async () => {
@@ -24,7 +25,7 @@ export default function PedidosAdminPage() {
       if (errPed) throw errPed;
       setPedidos((dbPedidos as Pedido[]) || []);
 
-      // Cargar pagos
+      // Cargar pagos agrupados
       const { data: dbPagos } = await supabase.from('pagos').select('pedido_id, monto');
       const mapa = new Map<string, number>();
       if (dbPagos) {
@@ -61,13 +62,9 @@ export default function PedidosAdminPage() {
 
     try {
       setCargando(true);
-      // 1. Eliminar pagos
+      await supabase.from('movimientos_saldo').delete().eq('referencia_pedido_id', p.id);
       await supabase.from('pagos').delete().eq('pedido_id', p.id);
-
-      // 2. Eliminar ítems
       await supabase.from('items_pedido').delete().eq('pedido_id', p.id);
-
-      // 3. Eliminar pedido
       const { error } = await supabase.from('pedidos').delete().eq('id', p.id);
       if (error) throw error;
 
@@ -80,6 +77,18 @@ export default function PedidosAdminPage() {
     }
   };
 
+  // Cálculos globales
+  const pedidosActivos = pedidos.filter((p) => !p.eliminado);
+  const totalFacturadoActivo = pedidosActivos
+    .filter((p) => p.estado !== 'cancelado')
+    .reduce((sum, p) => sum + Number(p.total || 0), 0);
+
+  const totalCobradoActivo = pedidosActivos
+    .filter((p) => p.estado !== 'cancelado')
+    .reduce((sum, p) => sum + (pagosMap.get(p.id) || 0), 0);
+
+  const totalDeudaActiva = Math.max(0, totalFacturadoActivo - totalCobradoActivo);
+
   // Filtrado
   const pedidosFiltrados = pedidos.filter((p) => {
     // Papelera
@@ -88,8 +97,12 @@ export default function PedidosAdminPage() {
     const pagado = pagosMap.get(p.id) || 0;
     const deuda = Math.max(0, Number(p.total || 0) - pagado);
 
-    if (filtroEstado === 'con_deuda' && (deuda <= 0 || p.estado === 'cancelado')) return false;
-    if (filtroEstado !== 'todos' && filtroEstado !== 'con_deuda' && p.estado !== filtroEstado) return false;
+    // Filtro logístico
+    if (filtroEstado !== 'todos' && p.estado !== filtroEstado) return false;
+
+    // Filtro de pago
+    if (filtroPago === 'con_deuda' && (deuda <= 0 || p.estado === 'cancelado')) return false;
+    if (filtroPago === 'saldados' && (deuda > 0 || p.estado === 'cancelado')) return false;
 
     if (!busqueda) return true;
     const b = busqueda.toLowerCase().trim();
@@ -100,8 +113,8 @@ export default function PedidosAdminPage() {
     return clienteNombre.includes(b) || idStr.includes(b) || tieneFiltro;
   });
 
-  const totalActivos = pedidos.filter((p) => !p.eliminado).length;
-  const totalEnPapelera = pedidos.filter((p) => p.eliminado).length;
+  const totalActivosCount = pedidosActivos.length;
+  const totalEnPapeleraCount = pedidos.filter((p) => p.eliminado).length;
 
   return (
     <div className="space-y-6">
@@ -110,10 +123,10 @@ export default function PedidosAdminPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-black text-slate-800 tracking-tight">
-            Gestión de Pedidos
+            Gestión de Pedidos & Cobranzas
           </h2>
           <p className="text-xs text-slate-500 font-medium mt-1">
-            Control de pedidos, estados de entrega, saldos y registro de cobranzas.
+            Control de pedidos, entregas logísticas, estados de pago y saldos de clientes.
           </p>
         </div>
 
@@ -131,12 +144,54 @@ export default function PedidosAdminPage() {
         </div>
       </div>
 
+      {/* KPI Cards Financieros */}
+      {!verEliminados && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="bg-white rounded-lg p-4 border border-slate-200 shadow-xs">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">
+              Total Facturado
+            </span>
+            <span className="text-xl font-black text-slate-900 font-mono mt-1 block">
+              ${totalFacturadoActivo.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+            </span>
+            <span className="text-[11px] text-slate-500 mt-0.5 block">
+              {pedidosActivos.filter(p => p.estado !== 'cancelado').length} pedidos activos
+            </span>
+          </div>
+
+          <div className="bg-white rounded-lg p-4 border border-slate-200 shadow-xs">
+            <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest block">
+              Total Cobrado
+            </span>
+            <span className="text-xl font-black text-emerald-700 font-mono mt-1 block">
+              ${totalCobradoActivo.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+            </span>
+            <span className="text-[11px] text-emerald-600/80 mt-0.5 block">
+              {totalFacturadoActivo > 0 ? `${Math.round((totalCobradoActivo / totalFacturadoActivo) * 100)}% de efectividad` : 'Sin pedidos'}
+            </span>
+          </div>
+
+          <div className="bg-white rounded-lg p-4 border border-slate-200 shadow-xs">
+            <span className="text-[10px] font-bold text-red-600 uppercase tracking-widest block">
+              Deuda Pendiente
+            </span>
+            <span className="text-xl font-black text-red-600 font-mono mt-1 block">
+              ${totalDeudaActiva.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+            </span>
+            <span className="text-[11px] text-red-600/80 mt-0.5 block">
+              {pedidosActivos.filter(p => (Number(p.total || 0) - (pagosMap.get(p.id) || 0)) > 0 && p.estado !== 'cancelado').length} pedidos con saldo pendiente
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Barra de Filtros */}
       <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-4 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-100 pb-4">
           
-          {/* Filtros por estado */}
+          {/* Filtros por estado logístico */}
           <div className="flex items-center gap-1.5 flex-wrap" role="group" aria-label="Filtrar pedidos por estado">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mr-1">Logística:</span>
             <button
               onClick={() => setFiltroEstado('todos')}
               aria-pressed={filtroEstado === 'todos'}
@@ -146,7 +201,7 @@ export default function PedidosAdminPage() {
                   : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
               }`}
             >
-              Todos ({verEliminados ? totalEnPapelera : totalActivos})
+              Todos ({verEliminados ? totalEnPapeleraCount : totalActivosCount})
             </button>
             <button
               onClick={() => setFiltroEstado('pendiente')}
@@ -192,34 +247,59 @@ export default function PedidosAdminPage() {
             >
               Cancelados
             </button>
+          </div>
+
+          {/* Filtros por estado de pago */}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mr-1">Cobro:</span>
             <button
-              onClick={() => setFiltroEstado('con_deuda')}
-              aria-pressed={filtroEstado === 'con_deuda'}
-              className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all cursor-pointer ${
-                filtroEstado === 'con_deuda'
-                  ? 'bg-red-600 text-white shadow-sm'
+              onClick={() => setFiltroPago('todos')}
+              className={`px-2.5 py-1 rounded text-xs font-bold transition-all cursor-pointer ${
+                filtroPago === 'todos'
+                  ? 'bg-slate-800 text-white'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              Todos
+            </button>
+            <button
+              onClick={() => setFiltroPago('con_deuda')}
+              className={`px-2.5 py-1 rounded text-xs font-bold transition-all cursor-pointer ${
+                filtroPago === 'con_deuda'
+                  ? 'bg-red-600 text-white'
                   : 'bg-red-50 text-red-700 hover:bg-red-100'
               }`}
             >
-              Con Deuda Pendiente
+              Impagos / Deuda
+            </button>
+            <button
+              onClick={() => setFiltroPago('saldados')}
+              className={`px-2.5 py-1 rounded text-xs font-bold transition-all cursor-pointer ${
+                filtroPago === 'saldados'
+                  ? 'bg-emerald-700 text-white'
+                  : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+              }`}
+            >
+              Saldados
+            </button>
+
+            {/* Toggle Papelera */}
+            <button
+              onClick={() => setVerEliminados(!verEliminados)}
+              className={`text-xs font-bold px-3 py-1 rounded-md border transition-all flex items-center gap-1.5 shrink-0 ml-2 cursor-pointer ${
+                verEliminados
+                  ? 'bg-red-50 border-red-200 text-red-700'
+                  : 'bg-slate-50 border-slate-200 text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <polyline points="3 6 5 6 21 6" />
+                <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+              </svg>
+              <span>{verEliminados ? `Papelera (${totalEnPapeleraCount})` : `Papelera (${totalEnPapeleraCount})`}</span>
             </button>
           </div>
 
-          {/* Toggle Papelera */}
-          <button
-            onClick={() => setVerEliminados(!verEliminados)}
-            className={`text-xs font-bold px-3 py-1.5 rounded-md border transition-all flex items-center gap-1.5 shrink-0 cursor-pointer ${
-              verEliminados
-                ? 'bg-red-50 border-red-200 text-red-700'
-                : 'bg-slate-50 border-slate-200 text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-              <polyline points="3 6 5 6 21 6" />
-              <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
-            </svg>
-            <span>{verEliminados ? `Viendo Papelera (${totalEnPapelera})` : `Ver Papelera (${totalEnPapelera})`}</span>
-          </button>
         </div>
 
         {/* Buscador */}
@@ -250,53 +330,57 @@ export default function PedidosAdminPage() {
 
       {/* Tabla de Pedidos */}
       <div className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs text-left">
-            <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider">
-              <tr>
-                <th scope="col" className="p-3.5">ID / Fecha</th>
-                <th scope="col" className="p-3.5">Cliente</th>
-                <th scope="col" className="p-3.5">Estado</th>
-                <th scope="col" className="p-3.5">Ítems</th>
-                <th scope="col" className="p-3.5 text-right">Total</th>
-                <th scope="col" className="p-3.5 text-right">Pagado</th>
-                <th scope="col" className="p-3.5 text-right">Deuda</th>
-                <th scope="col" className="p-3.5 text-right">Acciones</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {cargando ? (
+        {cargando ? (
+          <div className="py-20 flex flex-col items-center justify-center gap-3">
+            <div className="h-8 w-8 border-3 border-blue-900 border-t-transparent rounded-full animate-spin" />
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+              Cargando pedidos...
+            </p>
+          </div>
+        ) : pedidosFiltrados.length === 0 ? (
+          <div className="py-16 text-center text-slate-400">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mx-auto mb-2 text-slate-300">
+              <rect x="2" y="7" width="20" height="14" rx="2" ry="2" />
+              <path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16" />
+            </svg>
+            <p className="text-xs font-bold text-slate-600">No se encontraron pedidos</p>
+            <p className="text-[11px] text-slate-400 mt-1">
+              Probá cambiando los filtros o cargá un nuevo pedido desde el Facturador.
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs text-left">
+              <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200 uppercase text-[10px] tracking-wider">
                 <tr>
-                  <td colSpan={8} className="p-8 text-center text-slate-400">
-                    <div className="flex items-center justify-center gap-2">
-                      <div className="h-4 w-4 border-2 border-blue-900 border-t-transparent rounded-full animate-spin" aria-hidden="true" />
-                      <span>Cargando pedidos...</span>
-                    </div>
-                  </td>
+                  <th className="p-3.5">Pedido / Fecha</th>
+                  <th className="p-3.5">Cliente</th>
+                  <th className="p-3.5">Logística</th>
+                  <th className="p-3.5">Cobro</th>
+                  <th className="p-3.5">Unidades</th>
+                  <th className="p-3.5 text-right">Total</th>
+                  <th className="p-3.5 text-right">Pagado</th>
+                  <th className="p-3.5 text-right">Deuda</th>
+                  <th className="p-3.5 text-right">Acciones</th>
                 </tr>
-              ) : pedidosFiltrados.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="p-8 text-center text-slate-400">
-                    {verEliminados ? 'No hay pedidos en la papelera.' : 'No se encontraron pedidos con los filtros seleccionados.'}
-                  </td>
-                </tr>
-              ) : (
-                pedidosFiltrados.map((p) => {
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {pedidosFiltrados.map((p) => {
                   const pagado = pagosMap.get(p.id) || 0;
                   const deuda = Math.max(0, Number(p.total || 0) - pagado);
+                  const estadoPago = deuda === 0 && Number(p.total || 0) > 0 ? 'saldado' : pagado > 0 ? 'parcial' : 'impago';
 
                   return (
-                    <tr key={p.id} className="hover:bg-slate-50/70 transition-colors">
+                    <tr key={p.id} className="hover:bg-slate-50 transition-colors">
                       <td className="p-3.5">
-                        <span className="font-bold text-slate-900 block font-mono">
+                        <Link
+                          href={`/admin/pedidos/${p.id}`}
+                          className="font-bold text-blue-900 font-mono text-sm hover:underline block"
+                        >
                           #{p.id.slice(0, 8)}
-                        </span>
-                        <span className="text-[11px] text-slate-400">
-                          {new Date(p.created_at).toLocaleDateString('es-AR', {
-                            day: '2-digit',
-                            month: '2-digit',
-                            year: 'numeric',
-                          })}
+                        </Link>
+                        <span className="text-[10px] text-slate-400">
+                          {new Date(p.created_at).toLocaleDateString('es-AR')}
                         </span>
                       </td>
 
@@ -304,7 +388,7 @@ export default function PedidosAdminPage() {
                         {p.cliente ? (
                           <Link
                             href={`/admin/clientes/${p.cliente.id}`}
-                            className="font-bold text-blue-900 hover:underline block"
+                            className="font-bold text-slate-900 hover:text-blue-900 hover:underline block"
                           >
                             {p.cliente.nombre}
                           </Link>
@@ -320,7 +404,7 @@ export default function PedidosAdminPage() {
 
                       <td className="p-3.5">
                         <span
-                          className={`px-2.5 py-1 rounded text-[10px] font-bold uppercase ${
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
                             p.estado === 'entregado'
                               ? 'bg-green-100 text-green-800'
                               : p.estado === 'confirmado'
@@ -334,18 +418,32 @@ export default function PedidosAdminPage() {
                         </span>
                       </td>
 
+                      <td className="p-3.5">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ${
+                            estadoPago === 'saldado'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : estadoPago === 'parcial'
+                              ? 'bg-amber-100 text-amber-900'
+                              : 'bg-red-100 text-red-800'
+                          }`}
+                        >
+                          {estadoPago === 'saldado' ? 'Saldado' : estadoPago === 'parcial' ? 'Parcial' : 'Impago'}
+                        </span>
+                      </td>
+
                       <td className="p-3.5 text-slate-600">
                         <span className="font-bold text-slate-800">
                           {p.items?.reduce((s, it) => s + it.cantidad, 0) || 0}
                         </span>{' '}
-                        unidades ({p.items?.length || 0} tipos)
+                        u.
                       </td>
 
                       <td className="p-3.5 text-right font-black text-slate-900 font-mono text-sm">
                         ${Number(p.total || 0).toLocaleString('es-AR', { minimumFractionDigits: 2 })}
                       </td>
 
-                      <td className="p-3.5 text-right font-bold text-green-700 font-mono">
+                      <td className="p-3.5 text-right font-bold text-emerald-700 font-mono">
                         ${pagado.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
                       </td>
 
@@ -373,7 +471,7 @@ export default function PedidosAdminPage() {
                               href={`/admin/pedidos/${p.id}`}
                               className="px-3 py-1.5 bg-blue-900 hover:bg-blue-800 text-white rounded-md font-bold text-[11px] transition-colors shadow-xs"
                             >
-                              Ver Detalle →
+                              {deuda > 0 ? 'Cobrar / Ver →' : 'Ver Detalle →'}
                             </Link>
                             <button
                               onClick={() => handleSoftDelete(p)}
@@ -410,11 +508,11 @@ export default function PedidosAdminPage() {
                       </td>
                     </tr>
                   );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
     </div>

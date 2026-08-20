@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { generarPDF } from '@/lib/generarPDF';
-import type { Pedido, Pago, MetodoPago, EstadoPedido } from '@/lib/types';
+import type { Pedido, Pago, MetodoPago, EstadoPedido, EstadoPagoPedido } from '@/lib/types';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -21,6 +21,7 @@ export default function PedidoDetallePage({ params }: PageProps) {
   const [cargando, setCargando] = useState(true);
   const [descargandoPDF, setDescargandoPDF] = useState(false);
   const [guardandoPago, setGuardandoPago] = useState(false);
+  const [eliminandoPagoId, setEliminandoPagoId] = useState<string | null>(null);
   const [mensajeOk, setMensajeOk] = useState<string | null>(null);
   const [errorPago, setErrorPago] = useState<string | null>(null);
 
@@ -31,7 +32,7 @@ export default function PedidoDetallePage({ params }: PageProps) {
 
   const notificarOk = (txt: string) => {
     setMensajeOk(txt);
-    setTimeout(() => setMensajeOk(null), 3000);
+    setTimeout(() => setMensajeOk(null), 3500);
   };
 
   const cargarPedido = useCallback(async () => {
@@ -58,7 +59,7 @@ export default function PedidoDetallePage({ params }: PageProps) {
         .order('fecha', { ascending: false });
       setPagos((dbPagos as Pago[]) || []);
 
-      // 3. Cargar saldo a favor del cliente
+      // 3. Cargar saldo a favor real del cliente
       if (dbPedido.cliente_id) {
         const { data: dbSaldo } = await supabase
           .from('movimientos_saldo')
@@ -66,7 +67,7 @@ export default function PedidoDetallePage({ params }: PageProps) {
           .eq('cliente_id', dbPedido.cliente_id);
 
         const totalSaldo = (dbSaldo || []).reduce((acc: number, cur: any) => acc + Number(cur.monto || 0), 0);
-        setSaldoCliente(Math.max(0, totalSaldo));
+        setSaldoCliente(totalSaldo);
       }
     } catch (err) {
       console.error('Error al cargar detalle del pedido:', err);
@@ -81,7 +82,7 @@ export default function PedidoDetallePage({ params }: PageProps) {
 
   // Cambiar estado del pedido
   const handleCambiarEstado = async (nuevoEstado: EstadoPedido) => {
-    if (!confirm(`¿Cambiar estado del pedido a "${nuevoEstado.toUpperCase()}"?`)) return;
+    if (!confirm(`¿Cambiar estado logístico del pedido a "${nuevoEstado.toUpperCase()}"?`)) return;
 
     try {
       const { error } = await supabase
@@ -151,8 +152,13 @@ export default function PedidoDetallePage({ params }: PageProps) {
 
     try {
       setCargando(true);
+      // 1. Eliminar movimientos de saldo asociados
+      await supabase.from('movimientos_saldo').delete().eq('referencia_pedido_id', pedido.id);
+      // 2. Eliminar pagos
       await supabase.from('pagos').delete().eq('pedido_id', pedido.id);
+      // 3. Eliminar ítems
       await supabase.from('items_pedido').delete().eq('pedido_id', pedido.id);
+      // 4. Eliminar pedido
       const { error } = await supabase.from('pedidos').delete().eq('id', pedido.id);
       if (error) throw error;
 
@@ -168,7 +174,13 @@ export default function PedidoDetallePage({ params }: PageProps) {
   const totalPagado = pagos.reduce((sum, p) => sum + Number(p.monto || 0), 0);
   const totalPedido = Number(pedido?.total || 0);
   const deudaRestante = Math.max(0, totalPedido - totalPagado);
-  const estaSaldado = deudaRestante === 0 && totalPedido > 0;
+  
+  const estadoPago: EstadoPagoPedido =
+    deudaRestante === 0 && totalPedido > 0
+      ? 'saldado'
+      : totalPagado > 0
+      ? 'parcial'
+      : 'impago';
 
   // Registrar un pago
   const handleRegistrarPago = async (e: React.FormEvent) => {
@@ -178,6 +190,11 @@ export default function PedidoDetallePage({ params }: PageProps) {
     const montoNum = parseFloat(montoPago);
     if (isNaN(montoNum) || montoNum <= 0) {
       setErrorPago('Ingresá un monto válido mayor a 0');
+      return;
+    }
+
+    if (metodoPago === 'saldo_a_favor' && saldoCliente < montoNum) {
+      setErrorPago(`Saldo a favor insuficiente ($${saldoCliente.toLocaleString('es-AR')}). Ingresá un monto menor o seleccioná otro método.`);
       return;
     }
 
@@ -191,14 +208,25 @@ export default function PedidoDetallePage({ params }: PageProps) {
         cliente_id: pedido.cliente_id,
         monto: montoNum,
         metodo: metodoPago,
-        nota: notaPago.trim() || null,
+        nota: notaPago.trim() || (metodoPago === 'saldo_a_favor' ? 'Pago con Saldo a Favor' : null),
         fecha: new Date().toISOString(),
       });
 
       if (errPago) throw errPago;
 
-      // 2. Si el pago excede la deuda restante, generar movimiento de saldo a favor (excedente)
-      if (montoNum > deudaRestante && deudaRestante > 0) {
+      // 2. Si el método es saldo a favor, descontar del libro mayor de saldo
+      if (metodoPago === 'saldo_a_favor') {
+        await supabase.from('movimientos_saldo').insert({
+          cliente_id: pedido.cliente_id,
+          monto: -montoNum,
+          tipo: 'aplicado',
+          referencia_pedido_id: pedido.id,
+          nota: `Aplicado al pedido #${pedido.id.slice(0, 8)}`,
+          fecha: new Date().toISOString(),
+        });
+      }
+      // 3. Si el pago con otro método supera la deuda, acreditar excedente como saldo a favor
+      else if (montoNum > deudaRestante && deudaRestante > 0) {
         const excedente = montoNum - deudaRestante;
         await supabase.from('movimientos_saldo').insert({
           cliente_id: pedido.cliente_id,
@@ -222,7 +250,7 @@ export default function PedidoDetallePage({ params }: PageProps) {
     }
   };
 
-  // Aplicar saldo a favor existente
+  // Aplicar saldo a favor existente en 1 click
   const handleAplicarSaldo = async () => {
     if (!pedido || saldoCliente <= 0 || deudaRestante <= 0) return;
 
@@ -259,6 +287,45 @@ export default function PedidoDetallePage({ params }: PageProps) {
       console.error('Error al aplicar saldo:', err);
     } finally {
       setGuardandoPago(false);
+    }
+  };
+
+  // Saldar deuda total rápida en formulario
+  const handleLlenarDeudaTotal = () => {
+    if (deudaRestante > 0) {
+      setMontoPago(deudaRestante.toString());
+    }
+  };
+
+  // Eliminar un pago individual del historial
+  const handleEliminarPago = async (pago: Pago) => {
+    if (!confirm(`¿Estás seguro de anular el pago de $${Number(pago.monto).toLocaleString('es-AR')}? Si utilizó saldo a favor o generó excedente, se revertirá automáticamente.`)) {
+      return;
+    }
+
+    setEliminandoPagoId(pago.id);
+    try {
+      // 1. Si era saldo a favor, revertir el débito
+      if (pago.metodo === 'saldo_a_favor') {
+        await supabase
+          .from('movimientos_saldo')
+          .delete()
+          .eq('referencia_pedido_id', pedidoId)
+          .eq('tipo', 'aplicado')
+          .eq('monto', -Number(pago.monto));
+      }
+
+      // 2. Eliminar el pago
+      const { error } = await supabase.from('pagos').delete().eq('id', pago.id);
+      if (error) throw error;
+
+      notificarOk('Pago anulado correctamente');
+      await cargarPedido();
+    } catch (err: any) {
+      console.error(err);
+      alert(`Error al eliminar pago: ${err.message || 'Error desconocido'}`);
+    } finally {
+      setEliminandoPagoId(null);
     }
   };
 
@@ -319,26 +386,43 @@ export default function PedidoDetallePage({ params }: PageProps) {
 
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2.5 flex-wrap">
               <h2 className="text-2xl font-black text-slate-900 tracking-tight font-mono">
                 Pedido #{pedido.id.slice(0, 8)}
               </h2>
+
+              {/* Badge Estado Logístico */}
               <span
-                className={`px-3 py-1 rounded text-xs font-black uppercase tracking-wider ${
+                className={`px-2.5 py-0.5 rounded text-[11px] font-black uppercase tracking-wider ${
                   pedido.estado === 'entregado'
-                    ? 'bg-green-100 text-green-800'
+                    ? 'bg-green-100 text-green-800 border border-green-200'
                     : pedido.estado === 'confirmado'
-                    ? 'bg-blue-100 text-blue-800'
+                    ? 'bg-blue-100 text-blue-800 border border-blue-200'
                     : pedido.estado === 'cancelado'
-                    ? 'bg-slate-100 text-slate-600'
-                    : 'bg-amber-100 text-amber-800'
+                    ? 'bg-slate-100 text-slate-600 border border-slate-200'
+                    : 'bg-amber-100 text-amber-800 border border-amber-200'
                 }`}
+                title="Estado de entrega logística"
               >
-                {pedido.estado}
+                Logística: {pedido.estado}
+              </span>
+
+              {/* Badge Estado de Pago */}
+              <span
+                className={`px-2.5 py-0.5 rounded text-[11px] font-black uppercase tracking-wider ${
+                  estadoPago === 'saldado'
+                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                    : estadoPago === 'parcial'
+                    ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                    : 'bg-red-100 text-red-800 border border-red-200'
+                }`}
+                title="Estado financiero del pago"
+              >
+                Pago: {estadoPago === 'saldado' ? 'Saldado' : estadoPago === 'parcial' ? 'Pago Parcial' : 'Impago'}
               </span>
             </div>
 
-            <div className="flex items-center gap-3 text-xs text-slate-500 mt-1 flex-wrap">
+            <div className="flex items-center gap-3 text-xs text-slate-500 mt-1.5 flex-wrap">
               {pedido.cliente && (
                 <Link
                   href={`/admin/clientes/${pedido.cliente.id}`}
@@ -348,13 +432,12 @@ export default function PedidoDetallePage({ params }: PageProps) {
                 </Link>
               )}
               <span>• Fecha: {new Date(pedido.created_at).toLocaleDateString('es-AR', {
-                day: '2-digit',
-                month: '2-digit',
                 year: 'numeric',
+                month: 'long',
+                day: 'numeric',
                 hour: '2-digit',
                 minute: '2-digit',
               })}</span>
-              {pedido.presupuesto_id && <span>• Presupuesto origen vinculado</span>}
             </div>
           </div>
 
@@ -436,11 +519,10 @@ export default function PedidoDetallePage({ params }: PageProps) {
             {!pedido.eliminado && (
               <button
                 onClick={handleSoftDelete}
-                className="text-slate-400 hover:text-red-600 p-2 rounded-md hover:bg-red-50 border border-slate-200 transition-colors cursor-pointer"
-                title="Mover pedido a papelera"
-                aria-label="Mover pedido a papelera"
+                className="bg-slate-100 hover:bg-red-50 hover:text-red-700 text-slate-500 p-2 rounded-md transition-colors cursor-pointer"
+                title="Mover pedido a la papelera"
               >
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                   <polyline points="3 6 5 6 21 6" />
                   <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
                 </svg>
@@ -450,48 +532,73 @@ export default function PedidoDetallePage({ params }: PageProps) {
         </div>
       </div>
 
+      {/* Mensaje flotante de éxito */}
       {mensajeOk && (
-        <div className="p-3 bg-green-50 border border-green-200 rounded-md text-green-800 text-xs font-bold flex items-center gap-2">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-            <polyline points="20 6 9 17 4 12" />
-          </svg>
-          <span>{mensajeOk}</span>
+        <div className="p-3 bg-green-50 border border-green-200 rounded-md text-green-800 text-xs font-bold animate-in fade-in">
+          {mensajeOk}
         </div>
       )}
 
-      {/* Grid de Dos Columnas: Ítems y Cobranzas */}
+      {/* Grid Principal (Dos Columnas) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         
-        {/* Columna Izquierda: Ítems del pedido (7 columnas) */}
+        {/* Columna Izquierda: Información del Pedido e Ítems (7 columnas) */}
         <div className="lg:col-span-7 space-y-6">
           
-          {/* Tabla de ítems */}
-          <div className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
-            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+          {/* Card Datos del Cliente */}
+          {pedido.cliente && (
+            <div className="bg-white rounded-lg p-5 border border-slate-200 shadow-sm space-y-3">
               <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                Detalle de Ítems del Pedido
+                Datos del Cliente
               </h3>
-              <span className="text-xs font-bold text-slate-700">
-                {pedido.items?.length || 0} tipos de producto
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                <div>
+                  <span className="text-slate-400 block font-medium">Razón Social:</span>
+                  <span className="font-bold text-slate-800 text-sm">{pedido.cliente.nombre}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block font-medium">CUIT / CUIL:</span>
+                  <span className="font-mono text-slate-800 font-bold">{pedido.cliente.cuit || 'Sin CUIT'}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block font-medium">Condición de IVA:</span>
+                  <span className="text-slate-700 font-semibold">{pedido.cliente.condicion_iva || 'No especificada'}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block font-medium">Dirección / Contacto:</span>
+                  <span className="text-slate-700">{pedido.cliente.direccion || 'Sin dirección'}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Card Tabla de Ítems */}
+          <div className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+              <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                Filtros del Pedido ({pedido.items?.length || 0})
+              </h3>
+              <span className="text-xs text-slate-500 font-semibold">
+                {pedido.items?.reduce((s, it) => s + it.cantidad, 0)} unidades en total
               </span>
             </div>
 
             <div className="overflow-x-auto">
               <table className="w-full text-xs text-left">
-                <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider">
+                <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200 uppercase text-[10px]">
                   <tr>
                     <th className="p-3">Código FHL</th>
-                    <th className="p-3 text-center w-24">Cantidad</th>
-                    <th className="p-3 text-right w-32">Precio Unit.</th>
-                    <th className="p-3 text-right w-32">Subtotal</th>
+                    <th className="p-3 text-center">Cantidad</th>
+                    <th className="p-3 text-right">Precio Unitario</th>
+                    <th className="p-3 text-right">Subtotal</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {pedido.items?.map((it) => {
+                  {pedido.items?.map((it, idx) => {
                     const subtotal = it.cantidad * it.precio_unitario;
                     return (
-                      <tr key={it.id} className="hover:bg-slate-50/50">
-                        <td className="p-3 font-bold text-blue-900 text-sm">
+                      <tr key={it.id || idx} className="hover:bg-slate-50">
+                        <td className="p-3 font-bold text-slate-900 font-mono text-sm">
                           {it.codigo_fhl}
                         </td>
                         <td className="p-3 text-center font-bold text-slate-800">
@@ -540,9 +647,22 @@ export default function PedidoDetallePage({ params }: PageProps) {
           
           {/* Card Resumen de Pagos / Deuda */}
           <div className="bg-white rounded-lg p-5 border border-slate-200 shadow-sm space-y-4">
-            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-              Estado de Cobranza
-            </h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                Estado de Cobranza
+              </h3>
+              <span
+                className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                  estadoPago === 'saldado'
+                    ? 'bg-green-100 text-green-800'
+                    : estadoPago === 'parcial'
+                    ? 'bg-amber-100 text-amber-900'
+                    : 'bg-red-100 text-red-800'
+                }`}
+              >
+                {estadoPago}
+              </span>
+            </div>
 
             <div className="space-y-2 text-xs">
               <div className="flex justify-between py-1 border-b border-slate-100">
@@ -552,7 +672,7 @@ export default function PedidoDetallePage({ params }: PageProps) {
                 </span>
               </div>
               <div className="flex justify-between py-1 border-b border-slate-100">
-                <span className="text-slate-500">Total Pagado:</span>
+                <span className="text-slate-500">Total Abonado:</span>
                 <span className="font-bold text-green-700 font-mono">
                   ${totalPagado.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
                 </span>
@@ -569,6 +689,17 @@ export default function PedidoDetallePage({ params }: PageProps) {
               </div>
             </div>
 
+            {/* Botón rápido Saldar Deuda */}
+            {deudaRestante > 0 && (
+              <button
+                type="button"
+                onClick={handleLlenarDeudaTotal}
+                className="w-full py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-bold transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <span>Completar Deuda Total ($ {deudaRestante.toLocaleString('es-AR')}) en Formulario</span>
+              </button>
+            )}
+
             {/* Aviso de Saldo a Favor del cliente si tiene */}
             {saldoCliente > 0 && deudaRestante > 0 && (
               <div className="p-3 bg-blue-50 border border-blue-200 rounded-md flex items-center justify-between gap-2 text-xs">
@@ -581,7 +712,7 @@ export default function PedidoDetallePage({ params }: PageProps) {
                 <button
                   onClick={handleAplicarSaldo}
                   disabled={guardandoPago}
-                  className="px-3 py-1.5 bg-blue-900 hover:bg-blue-800 text-white rounded-lg font-bold text-[11px] shadow-xs"
+                  className="px-3 py-1.5 bg-blue-900 hover:bg-blue-800 text-white rounded-lg font-bold text-[11px] shadow-xs cursor-pointer disabled:opacity-50"
                 >
                   Aplicar Saldo
                 </button>
@@ -592,7 +723,7 @@ export default function PedidoDetallePage({ params }: PageProps) {
           {/* Formulario Registrar Pago */}
           <div className="bg-white rounded-lg p-5 border border-slate-200 shadow-sm space-y-4">
             <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-              Registrar Nuevo Pago
+              Registrar Cobranza
             </h3>
 
             {errorPago && (
@@ -620,7 +751,7 @@ export default function PedidoDetallePage({ params }: PageProps) {
 
               <div>
                 <label htmlFor="pago-metodo" className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                  Método de Pago *
+                  Método de Cobro *
                 </label>
                 <select
                   id="pago-metodo"
@@ -632,6 +763,11 @@ export default function PedidoDetallePage({ params }: PageProps) {
                   <option value="efectivo">Efectivo</option>
                   <option value="cheque">Cheque</option>
                   <option value="mercadopago">Mercado Pago</option>
+                  {saldoCliente > 0 && (
+                    <option value="saldo_a_favor">
+                      Saldo a Favor del Cliente (Disp: ${saldoCliente.toLocaleString('es-AR')})
+                    </option>
+                  )}
                 </select>
               </div>
 
@@ -649,10 +785,10 @@ export default function PedidoDetallePage({ params }: PageProps) {
                 />
               </div>
 
-              {parseFloat(montoPago) > deudaRestante && deudaRestante > 0 && (
+              {parseFloat(montoPago) > deudaRestante && deudaRestante > 0 && metodoPago !== 'saldo_a_favor' && (
                 <p className="text-[11px] text-blue-700 bg-blue-50 p-2 rounded-md font-medium">
                   El monto supera la deuda. Se acreditarán{' '}
-                  <strong>${(parseFloat(montoPago) - deudaRestante).toLocaleString('es-AR')}</strong> como saldo a favor.
+                  <strong>${(parseFloat(montoPago) - deudaRestante).toLocaleString('es-AR')}</strong> automáticamente como saldo a favor del cliente.
                 </p>
               )}
 
@@ -664,7 +800,7 @@ export default function PedidoDetallePage({ params }: PageProps) {
                 {guardandoPago ? (
                   <>
                     <div className="h-3.5 w-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" aria-hidden="true" />
-                    <span>Guardando...</span>
+                    <span>Guardando pago...</span>
                   </>
                 ) : (
                   <span>Registrar Cobranza</span>
@@ -688,7 +824,7 @@ export default function PedidoDetallePage({ params }: PageProps) {
                 {pagos.map((p) => (
                   <div
                     key={p.id}
-                    className="p-3 bg-slate-50 rounded-md border border-slate-100 text-xs flex items-center justify-between"
+                    className="p-3 bg-slate-50 rounded-md border border-slate-100 text-xs flex items-center justify-between gap-2"
                   >
                     <div>
                       <div className="flex items-center gap-2">
@@ -707,6 +843,22 @@ export default function PedidoDetallePage({ params }: PageProps) {
                         {new Date(p.fecha).toLocaleDateString('es-AR')} • {p.nota || 'Sin nota'}
                       </span>
                     </div>
+
+                    <button
+                      onClick={() => handleEliminarPago(p)}
+                      disabled={eliminandoPagoId === p.id}
+                      className="text-slate-400 hover:text-red-600 p-1.5 rounded hover:bg-red-50 transition-colors cursor-pointer"
+                      title="Anular / Eliminar este pago"
+                    >
+                      {eliminandoPagoId === p.id ? (
+                        <div className="h-3.5 w-3.5 border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="3 6 5 6 21 6" />
+                          <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+                        </svg>
+                      )}
+                    </button>
                   </div>
                 ))}
               </div>

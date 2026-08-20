@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../../../../lib/supabase';
-import type { Cliente } from '../../../../lib/types';
+import type { Cliente, ListaPrecio } from '../../../../lib/types';
 
 interface SelectorClienteProps {
   clienteSeleccionado: Cliente | null;
@@ -17,13 +17,22 @@ interface FormData {
   direccion: string;
   telefono: string;
   email: string;
+  listaPrecioId: string;
 }
 
-const formVacio: FormData = { nombre: '', cuit: '', direccion: '', telefono: '', email: '' };
+const formVacio: FormData = {
+  nombre: '',
+  cuit: '',
+  direccion: '',
+  telefono: '',
+  email: '',
+  listaPrecioId: '',
+};
 
 export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: SelectorClienteProps) {
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [clientesEliminados, setClientesEliminados] = useState<Cliente[]>([]);
+  const [listasPrecios, setListasPrecios] = useState<ListaPrecio[]>([]);
   const [cargando, setCargando] = useState(true);
   const [vista, setVista] = useState<Vista>('selector');
   const [formData, setFormData] = useState<FormData>(formVacio);
@@ -33,21 +42,22 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
   const [confirmarEliminar, setConfirmarEliminar] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Cargar clientes activos
-  const cargarClientes = async () => {
+  // Cargar clientes activos y listas de precios
+  const cargarDatos = async () => {
     setCargando(true);
-    const { data, error: err } = await supabase
-      .from('clientes')
-      .select('*')
-      .eq('eliminado', false)
-      .order('nombre');
-    if (err) {
-      setError('Error al cargar clientes');
-      console.error(err);
-    } else {
-      setClientes(data as Cliente[]);
+    try {
+      const [resCli, resListas] = await Promise.all([
+        supabase.from('clientes').select('*').eq('eliminado', false).order('nombre'),
+        supabase.from('listas_precios').select('*').eq('activa', true).eq('eliminado', false).order('nombre'),
+      ]);
+
+      if (resCli.data) setClientes(resCli.data as Cliente[]);
+      if (resListas.data) setListasPrecios(resListas.data as ListaPrecio[]);
+    } catch (err) {
+      console.error('Error al cargar datos:', err);
+    } finally {
+      setCargando(false);
     }
-    setCargando(false);
   };
 
   // Cargar clientes eliminados
@@ -61,7 +71,7 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
   };
 
   useEffect(() => {
-    cargarClientes();
+    cargarDatos();
   }, []);
 
   // Focus en input al abrir formulario
@@ -84,8 +94,9 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
       nombre: clienteSeleccionado.nombre,
       cuit: clienteSeleccionado.cuit || '',
       direccion: clienteSeleccionado.direccion || '',
-      telefono: clienteSeleccionado.telefono || '',
-      email: clienteSeleccionado.email || '',
+      telefono: '',
+      email: '',
+      listaPrecioId: clienteSeleccionado.lista_precio_id || '',
     });
     setEditandoId(clienteSeleccionado.id);
     setVista('formulario');
@@ -95,6 +106,13 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
   const abrirEliminados = async () => {
     await cargarEliminados();
     setVista('eliminados');
+    setError(null);
+  };
+
+  const cancelar = () => {
+    setVista('selector');
+    setFormData(formVacio);
+    setEditandoId(null);
     setError(null);
   };
 
@@ -123,6 +141,7 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
       nombre: formData.nombre.trim(),
       cuit: formData.cuit.trim() || null,
       direccion: direccionCompleta || null,
+      lista_precio_id: formData.listaPrecioId || null,
     };
 
     try {
@@ -140,6 +159,7 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
             nombre: payload.nombre,
             cuit: payload.cuit,
             direccion: payload.direccion,
+            lista_precio_id: payload.lista_precio_id,
           });
         }
       } else {
@@ -156,7 +176,7 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
         onSeleccionar(data as Cliente);
       }
 
-      await cargarClientes();
+      await cargarDatos();
       setVista('selector');
       setFormData(formVacio);
       setEditandoId(null);
@@ -181,65 +201,39 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
       if (err) throw err;
 
       onSeleccionar(null);
-      await cargarClientes();
+      await cargarDatos();
       setConfirmarEliminar(false);
     } catch (err) {
       console.error(err);
-      setError('Error al eliminar');
+      setError('Error al eliminar cliente');
     } finally {
       setGuardando(false);
     }
   };
 
-  const restaurar = async (id: string) => {
-    setGuardando(true);
-    try {
-      const { error: err } = await supabase
-        .from('clientes')
-        .update({ eliminado: false })
-        .eq('id', id);
-
-      if (err) throw err;
-
-      await cargarEliminados();
-      await cargarClientes();
-    } catch (err) {
-      console.error(err);
-      setError('Error al restaurar');
-    } finally {
-      setGuardando(false);
-    }
-  };
-
-  const cancelar = () => {
-    setVista('selector');
-    setFormData(formVacio);
-    setEditandoId(null);
-    setError(null);
-    setConfirmarEliminar(false);
-  };
-
-  // Estilo base de inputs — texto oscuro, sin redondeos excesivos
-  const inputClase = "w-full border border-slate-300 rounded px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500";
+  const inputClase =
+    'w-full border border-slate-300 rounded px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-blue-600';
 
   return (
-    <div className="bg-white rounded shadow-sm border border-slate-200 p-5">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest">
+    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5 space-y-4">
+      {/* Encabezado */}
+      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">
           Cliente
-        </h2>
+        </h3>
         {vista === 'selector' && (
           <button
             onClick={abrirEliminados}
-            className="text-xs text-slate-400 hover:text-slate-600 transition-colors underline"
+            className="text-[11px] text-slate-400 hover:text-slate-600 transition-colors"
           >
             Ver eliminados
           </button>
         )}
       </div>
 
+      {/* Mensaje de error */}
       {error && (
-        <div className="mb-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">
+        <div className="p-2.5 bg-red-50 border border-red-200 rounded text-red-700 text-xs font-semibold">
           {error}
         </div>
       )}
@@ -251,16 +245,20 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
             <select
               value={clienteSeleccionado?.id || ''}
               onChange={(e) => {
-                const c = clientes.find((c) => c.id === e.target.value) || null;
-                onSeleccionar(c);
-                setConfirmarEliminar(false);
+                const id = e.target.value;
+                if (!id) {
+                  onSeleccionar(null);
+                } else {
+                  const c = clientes.find((item) => item.id === id);
+                  onSeleccionar(c || null);
+                }
               }}
               aria-label="Seleccionar cliente registrado"
-              className="flex-1 border border-slate-300 rounded px-3 py-2.5 text-sm text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              className="flex-1 border border-slate-300 rounded px-3 py-2 text-xs text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-blue-600 font-medium"
               disabled={cargando}
             >
               <option value="">
-                {cargando ? 'Cargando...' : '— Seleccionar cliente —'}
+                {cargando ? 'Cargando clientes...' : '— Seleccionar cliente —'}
               </option>
               {clientes.map((c) => (
                 <option key={c.id} value={c.id}>
@@ -270,43 +268,56 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
             </select>
             <button
               onClick={abrirNuevo}
-              className="bg-blue-900 hover:bg-blue-800 text-white px-4 py-2.5 rounded text-sm font-semibold transition-colors flex items-center gap-1.5 whitespace-nowrap"
+              className="bg-blue-900 hover:bg-blue-800 text-white px-3 py-2 rounded text-xs font-bold transition-colors flex items-center gap-1 shrink-0 cursor-pointer shadow-xs"
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
                 <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
               </svg>
-              Nuevo
+              <span>Nuevo</span>
             </button>
           </div>
 
           {/* Info del cliente seleccionado + acciones */}
           {clienteSeleccionado && (
-            <div className="mt-3 bg-slate-50 border border-slate-200 rounded p-3">
-              <div className="flex items-start justify-between">
-                <div className="text-sm">
-                  <p className="font-semibold text-slate-900">{clienteSeleccionado.nombre}</p>
+            <div className="mt-3 bg-slate-50 border border-slate-200 rounded p-3 text-xs">
+              <div className="flex items-start justify-between gap-2">
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <p className="font-bold text-slate-900 text-sm">{clienteSeleccionado.nombre}</p>
+                    {clienteSeleccionado.lista_precio_id && (() => {
+                      const lp = listasPrecios.find((l) => l.id === clienteSeleccionado.lista_precio_id);
+                      if (!lp) return null;
+                      return (
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200">
+                          {lp.nombre}
+                        </span>
+                      );
+                    })()}
+                  </div>
+
                   {clienteSeleccionado.cuit && (
-                    <p className="text-slate-600 mt-0.5">CUIT: {clienteSeleccionado.cuit}</p>
+                    <p className="text-slate-500 font-mono">CUIT: {clienteSeleccionado.cuit}</p>
                   )}
                   {clienteSeleccionado.direccion && (
-                    <p className="text-slate-600 mt-0.5">{clienteSeleccionado.direccion}</p>
+                    <p className="text-slate-600">{clienteSeleccionado.direccion}</p>
                   )}
                 </div>
-                <div className="flex items-center gap-1">
+
+                <div className="flex items-center gap-1 shrink-0">
                   <button
                     onClick={abrirEditar}
-                    className="text-blue-600 hover:text-blue-800 p-1.5 rounded hover:bg-blue-50 transition-colors"
+                    className="text-blue-600 hover:text-blue-800 p-1.5 rounded hover:bg-blue-50 transition-colors cursor-pointer"
                     title="Editar cliente"
                   >
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
+                      <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
                       <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
                     </svg>
                   </button>
                   {!confirmarEliminar ? (
                     <button
                       onClick={() => setConfirmarEliminar(true)}
-                      className="text-red-500 hover:text-red-700 p-1.5 rounded hover:bg-red-50 transition-colors"
+                      className="text-red-500 hover:text-red-700 p-1.5 rounded hover:bg-red-50 transition-colors cursor-pointer"
                       title="Eliminar cliente"
                     >
                       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -318,13 +329,13 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
                       <button
                         onClick={eliminar}
                         disabled={guardando}
-                        className="text-xs bg-red-600 hover:bg-red-700 text-white px-2.5 py-1 rounded font-semibold transition-colors disabled:opacity-50"
+                        className="text-xs bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded font-bold transition-colors disabled:opacity-50 cursor-pointer"
                       >
                         {guardando ? '...' : 'Confirmar'}
                       </button>
                       <button
                         onClick={() => setConfirmarEliminar(false)}
-                        className="text-xs text-slate-600 hover:text-slate-800 px-2 py-1 rounded transition-colors"
+                        className="text-xs text-slate-600 hover:text-slate-800 px-2 py-1 rounded transition-colors cursor-pointer"
                       >
                         No
                       </button>
@@ -339,13 +350,14 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
 
       {/* ===== VISTA FORMULARIO (Crear / Editar) ===== */}
       {vista === 'formulario' && (
-        <div>
-          <p className="text-sm font-semibold text-slate-800 mb-3">
-            {editandoId ? 'Editar cliente' : 'Nuevo cliente'}
+        <div className="space-y-3">
+          <p className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+            {editandoId ? 'Editar Cliente' : 'Nuevo Cliente'}
           </p>
+
           <div className="space-y-3">
             <div>
-              <label htmlFor="facturador-cliente-nombre" className="block text-xs font-semibold text-slate-600 mb-1">
+              <label htmlFor="facturador-cliente-nombre" className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
                 Nombre / Razón Social *
               </label>
               <input
@@ -354,13 +366,14 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
                 type="text"
                 value={formData.nombre}
                 onChange={(e) => setFormData({ ...formData, nombre: e.target.value })}
-                placeholder="Ej: Distribuidora Norte S.A."
+                placeholder="Ej: Distribuidora Automotriz Norte S.A."
                 className={inputClase}
               />
             </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label htmlFor="facturador-cliente-cuit" className="block text-xs font-semibold text-slate-600 mb-1">
+                <label htmlFor="facturador-cliente-cuit" className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
                   CUIT / CUIL
                 </label>
                 <input
@@ -372,23 +385,44 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
                   className={inputClase}
                 />
               </div>
+
               <div>
-                <label htmlFor="facturador-cliente-dir" className="block text-xs font-semibold text-slate-600 mb-1">
-                  Dirección
+                <label htmlFor="facturador-cliente-lista" className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  Lista de Precios Predeterminada
                 </label>
-                <input
-                  id="facturador-cliente-dir"
-                  type="text"
-                  value={formData.direccion}
-                  onChange={(e) => setFormData({ ...formData, direccion: e.target.value })}
-                  placeholder="Ej: Av. Rivadavia 1234, CABA"
-                  className={inputClase}
-                />
+                <select
+                  id="facturador-cliente-lista"
+                  value={formData.listaPrecioId}
+                  onChange={(e) => setFormData({ ...formData, listaPrecioId: e.target.value })}
+                  className={`${inputClase} bg-white`}
+                >
+                  <option value="">-- Predeterminada General --</option>
+                  {listasPrecios.map((lp) => (
+                    <option key={lp.id} value={lp.id}>
+                      {lp.nombre} {lp.es_predeterminada ? '(Global)' : ''}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
+
+            <div>
+              <label htmlFor="facturador-cliente-dir" className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                Dirección / Contacto
+              </label>
+              <input
+                id="facturador-cliente-dir"
+                type="text"
+                value={formData.direccion}
+                onChange={(e) => setFormData({ ...formData, direccion: e.target.value })}
+                placeholder="Ej: Av. Rivadavia 1234, CABA"
+                className={inputClase}
+              />
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label htmlFor="facturador-cliente-tel" className="block text-xs font-semibold text-slate-600 mb-1">
+                <label htmlFor="facturador-cliente-tel" className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
                   Teléfono / WhatsApp
                 </label>
                 <input
@@ -401,7 +435,7 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
                 />
               </div>
               <div>
-                <label htmlFor="facturador-cliente-email" className="block text-xs font-semibold text-slate-600 mb-1">
+                <label htmlFor="facturador-cliente-email" className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
                   Email
                 </label>
                 <input
@@ -415,17 +449,20 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
               </div>
             </div>
           </div>
-          <div className="flex justify-end gap-2 mt-4">
+
+          <div className="flex justify-end gap-2 pt-2">
             <button
+              type="button"
               onClick={cancelar}
-              className="px-4 py-2 text-sm text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded transition-colors"
+              className="px-3.5 py-1.5 text-xs font-semibold text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded transition-colors cursor-pointer"
             >
               Cancelar
             </button>
             <button
+              type="button"
               onClick={guardar}
               disabled={guardando}
-              className="px-4 py-2 text-sm font-semibold text-white bg-blue-900 hover:bg-blue-800 rounded transition-colors disabled:opacity-50"
+              className="px-4 py-1.5 text-xs font-bold text-white bg-blue-900 hover:bg-blue-800 rounded transition-colors disabled:opacity-50 cursor-pointer shadow-xs"
             >
               {guardando ? 'Guardando...' : (editandoId ? 'Guardar Cambios' : 'Crear Cliente')}
             </button>
@@ -435,29 +472,32 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
 
       {/* ===== VISTA ELIMINADOS ===== */}
       {vista === 'eliminados' && (
-        <div>
-          <p className="text-sm font-semibold text-slate-800 mb-3">
-            Clientes eliminados
+        <div className="space-y-3">
+          <p className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+            Clientes en Papelera
           </p>
           {clientesEliminados.length === 0 ? (
-            <p className="text-sm text-slate-500 py-4 text-center">
-              No hay clientes eliminados.
+            <p className="text-xs text-slate-400 py-3 text-center italic">
+              No hay clientes en la papelera.
             </p>
           ) : (
-            <div className="space-y-2 max-h-60 overflow-y-auto">
+            <div className="space-y-2 max-h-56 overflow-y-auto">
               {clientesEliminados.map((c) => (
                 <div
                   key={c.id}
-                  className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded px-3 py-2"
+                  className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded px-3 py-2 text-xs"
                 >
-                  <div className="text-sm">
-                    <span className="font-medium text-slate-700">{c.nombre}</span>
-                    {c.cuit && <span className="text-slate-500 ml-2">({c.cuit})</span>}
+                  <div>
+                    <span className="font-bold text-slate-700">{c.nombre}</span>
+                    {c.cuit && <span className="text-slate-400 ml-2 font-mono">({c.cuit})</span>}
                   </div>
                   <button
-                    onClick={() => restaurar(c.id)}
-                    disabled={guardando}
-                    className="text-xs bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded font-semibold transition-colors disabled:opacity-50"
+                    onClick={async () => {
+                      await supabase.from('clientes').update({ eliminado: false }).eq('id', c.id);
+                      await cargarDatos();
+                      await cargarEliminados();
+                    }}
+                    className="text-xs text-green-700 hover:text-green-800 font-bold cursor-pointer"
                   >
                     Restaurar
                   </button>
@@ -465,14 +505,12 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
               ))}
             </div>
           )}
-          <div className="flex justify-end mt-4">
-            <button
-              onClick={cancelar}
-              className="px-4 py-2 text-sm text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded transition-colors"
-            >
-              Volver
-            </button>
-          </div>
+          <button
+            onClick={() => setVista('selector')}
+            className="w-full py-1.5 text-xs text-slate-600 bg-slate-100 hover:bg-slate-200 rounded font-semibold transition-colors cursor-pointer"
+          >
+            Volver al Selector
+          </button>
         </div>
       )}
     </div>

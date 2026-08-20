@@ -3,15 +3,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
-import type { Cliente, ListaPrecio } from '@/lib/types';
+import type { Cliente, ListaPrecio, ResumenFinancieroCliente } from '@/lib/types';
 import ModalAjusteSaldo from './components/ModalAjusteSaldo';
-
-interface ResumenFinancieroCliente {
-  totalComprado: number;
-  totalDeuda: number;
-  totalSaldo: number;
-  pedidosPendientes: number;
-}
 
 export default function ClientesAdminPage() {
   const [clientes, setClientes] = useState<Cliente[]>([]);
@@ -32,10 +25,12 @@ export default function ClientesAdminPage() {
   const [modalSaldo, setModalSaldo] = useState<{
     abierto: boolean;
     cliente: Cliente | null;
+    deudaActual: number;
     saldoActual: number;
   }>({
     abierto: false,
     cliente: null,
+    deudaActual: 0,
     saldoActual: 0,
   });
   
@@ -113,7 +108,7 @@ export default function ClientesAdminPage() {
 
       listaClientes.forEach((c) => {
         let totalComprado = 0;
-        let totalDeuda = 0;
+        let totalDeudaPedidos = 0;
         let pedidosPendientes = 0;
 
         if (dbPedidos) {
@@ -125,18 +120,23 @@ export default function ClientesAdminPage() {
               const deudaP = Math.max(0, totalP - pagadoP);
 
               totalComprado += totalP;
-              totalDeuda += deudaP;
+              totalDeudaPedidos += deudaP;
               if (p.estado === 'pendiente') pedidosPendientes++;
             });
         }
 
-        const totalSaldo = Math.max(0, saldoPorCliente.get(c.id) || 0);
+        const balanceSaldo = saldoPorCliente.get(c.id) || 0;
+        const saldoAFavor = Math.max(0, balanceSaldo);
+        const deudaAjustes = Math.max(0, -balanceSaldo);
+        const totalDeuda = totalDeudaPedidos + deudaAjustes;
 
         mapaResumen[c.id] = {
           totalComprado,
+          totalPagado: totalComprado - totalDeudaPedidos,
           totalDeuda,
-          totalSaldo,
+          totalSaldoAFavor: saldoAFavor,
           pedidosPendientes,
+          pedidosImpagos: totalDeuda > 0 ? 1 : 0,
         };
       });
 
@@ -282,10 +282,10 @@ export default function ClientesAdminPage() {
 
   // Filtrado de clientes
   const clientesFiltrados = clientes.filter((c) => {
-    const res = resumenes[c.id] || { totalDeuda: 0, totalSaldo: 0 };
+    const res = resumenes[c.id] || { totalDeuda: 0, totalSaldoAFavor: 0 };
     if (filtroEstado === 'con_deuda' && res.totalDeuda <= 0) return false;
-    if (filtroEstado === 'con_saldo' && res.totalSaldo <= 0) return false;
-    if (filtroEstado === 'al_dia' && (res.totalDeuda > 0 || res.totalSaldo > 0)) return false;
+    if (filtroEstado === 'con_saldo' && res.totalSaldoAFavor <= 0) return false;
+    if (filtroEstado === 'al_dia' && (res.totalDeuda > 0 || res.totalSaldoAFavor > 0)) return false;
 
     if (!busqueda) return true;
     const b = busqueda.toLowerCase().trim();
@@ -431,13 +431,15 @@ export default function ClientesAdminPage() {
           {clientesFiltrados.map((c) => {
             const res = resumenes[c.id] || {
               totalComprado: 0,
+              totalPagado: 0,
               totalDeuda: 0,
-              totalSaldo: 0,
+              totalSaldoAFavor: 0,
               pedidosPendientes: 0,
+              pedidosImpagos: 0,
             };
 
             const tieneDeuda = res.totalDeuda > 0;
-            const tieneSaldo = res.totalSaldo > 0;
+            const tieneSaldo = res.totalSaldoAFavor > 0;
 
             return (
               <div
@@ -479,10 +481,10 @@ export default function ClientesAdminPage() {
                     {/* Botones de acción sin solapamiento */}
                     <div className="flex items-center gap-1 shrink-0">
                       <button
-                        onClick={() => setModalSaldo({ abierto: true, cliente: c, saldoActual: res.totalSaldo })}
+                        onClick={() => setModalSaldo({ abierto: true, cliente: c, deudaActual: res.totalDeuda, saldoActual: res.totalSaldoAFavor })}
                         className="text-slate-500 hover:text-emerald-700 p-1.5 rounded-md hover:bg-emerald-50 transition-colors"
-                        title="Ajustar o editar saldo a favor"
-                        aria-label={`Ajustar saldo de ${c.nombre}`}
+                        title="Ajustar deuda o saldo del cliente"
+                        aria-label={`Ajustar deuda o saldo de ${c.nombre}`}
                       >
                         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                           <rect x="2" y="4" width="20" height="16" rx="2" />
@@ -598,18 +600,18 @@ export default function ClientesAdminPage() {
                         </span>
                         <button
                           type="button"
-                          onClick={() => setModalSaldo({ abierto: true, cliente: c, saldoActual: res.totalSaldo })}
+                          onClick={() => setModalSaldo({ abierto: true, cliente: c, deudaActual: res.totalDeuda, saldoActual: res.totalSaldoAFavor })}
                           className="text-[10px] font-bold text-blue-900 hover:underline cursor-pointer"
                         >
-                          Editar
+                          Ajustar
                         </button>
                       </div>
                       <span
                         className={`font-black font-mono text-sm block ${
-                          tieneSaldo ? 'text-blue-600' : 'text-slate-800'
+                          tieneSaldo ? 'text-emerald-700' : 'text-slate-800'
                         }`}
                       >
-                        ${res.totalSaldo.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+                        ${res.totalSaldoAFavor.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
                       </span>
                     </div>
                   </div>
@@ -784,7 +786,7 @@ export default function ClientesAdminPage() {
                     <option value="">-- Automática / Predeterminada del Sistema --</option>
                     {listasPrecios.map((lp) => (
                       <option key={lp.id} value={lp.id}>
-                        {lp.nombre} {lp.tipo_ajuste === 'costeo' ? `(Costeo: ${lp.canal_costeo || 'Fábrica'})` : lp.tipo_ajuste === 'excel' ? '(Planilla Excel)' : lp.porcentaje !== 0 ? `(${lp.porcentaje > 0 ? `+${lp.porcentaje}%` : `${lp.porcentaje}%`})` : '(Base)'} {lp.es_predeterminada ? '(Predeterminada)' : ''}
+                        {lp.nombre} {lp.es_predeterminada ? '(Predeterminada)' : ''}
                       </option>
                     ))}
                   </select>
@@ -907,8 +909,9 @@ export default function ClientesAdminPage() {
       {modalSaldo.cliente && (
         <ModalAjusteSaldo
           abierto={modalSaldo.abierto}
-          onCerrar={() => setModalSaldo({ abierto: false, cliente: null, saldoActual: 0 })}
+          onCerrar={() => setModalSaldo({ abierto: false, cliente: null, deudaActual: 0, saldoActual: 0 })}
           cliente={{ id: modalSaldo.cliente.id, nombre: modalSaldo.cliente.nombre }}
+          deudaActual={modalSaldo.deudaActual}
           saldoActual={modalSaldo.saldoActual}
           onGuardado={async () => {
             await cargarDatos();

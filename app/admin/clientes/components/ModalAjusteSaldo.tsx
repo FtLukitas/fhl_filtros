@@ -12,6 +12,7 @@ interface ModalAjusteSaldoProps {
   } | null;
   deudaActual?: number;
   saldoActual?: number;
+  saldoNetoActual?: number;
   onGuardado: () => void;
 }
 
@@ -23,6 +24,7 @@ export default function ModalAjusteSaldo({
   cliente,
   deudaActual = 0,
   saldoActual = 0,
+  saldoNetoActual,
   onGuardado,
 }: ModalAjusteSaldoProps) {
   const [modo, setModo] = useState<ModoAjuste>('cargar_deuda');
@@ -31,6 +33,9 @@ export default function ModalAjusteSaldo({
   const [fecha, setFecha] = useState('');
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Saldo neto base: si no se provee explícito, se deriva de saldoActual - deudaActual
+  const saldoNetoBase = saldoNetoActual !== undefined ? saldoNetoActual : (saldoActual - deudaActual);
 
   useEffect(() => {
     if (abierto && cliente) {
@@ -58,16 +63,17 @@ export default function ModalAjusteSaldo({
     saldoResultante = saldoActual;
   } else if (modo === 'sumar_credito') {
     deltaMonto = Math.abs(montoNumerico);
-    deudaResultante = deudaActual;
+    deudaResultante = Math.max(0, deudaActual - Math.abs(montoNumerico));
     saldoResultante = saldoActual + Math.abs(montoNumerico);
   } else if (modo === 'fijar_deuda') {
-    // Si el usuario quiere fijar la deuda total en X:
     const deudaDeseada = Math.max(0, montoNumerico);
     const diferencia = deudaDeseada - deudaActual;
     deltaMonto = -diferencia;
     deudaResultante = deudaDeseada;
     saldoResultante = saldoActual;
   }
+
+  const saldoNetoResultante = saldoNetoBase + deltaMonto;
 
   const sugerenciasConcepto =
     modo === 'cargar_deuda'
@@ -173,25 +179,25 @@ export default function ModalAjusteSaldo({
             </span>
           </div>
 
-          <div className="text-right flex items-center justify-end gap-3">
-            <div>
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                Deuda Actual
-              </span>
-              <span className={`font-black font-mono text-sm ${deudaActual > 0 ? 'text-red-600' : 'text-slate-700'}`}>
-                ${deudaActual.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
-              </span>
-            </div>
-            {saldoActual > 0 && (
-              <div className="border-l border-slate-200 pl-3">
-                <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider block">
-                  A Favor
-                </span>
-                <span className="font-black font-mono text-sm text-emerald-700">
-                  ${saldoActual.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
-                </span>
-              </div>
-            )}
+          <div className="text-right">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+              Saldo Neto Actual
+            </span>
+            <span
+              className={`font-black font-mono text-sm block ${
+                saldoNetoBase < 0
+                  ? 'text-red-600'
+                  : saldoNetoBase > 0
+                  ? 'text-emerald-700'
+                  : 'text-slate-600'
+              }`}
+            >
+              {saldoNetoBase < 0
+                ? `-$${Math.abs(saldoNetoBase).toLocaleString('es-AR', { minimumFractionDigits: 2 })} (Debe)`
+                : saldoNetoBase > 0
+                ? `+$${saldoNetoBase.toLocaleString('es-AR', { minimumFractionDigits: 2 })} (A Favor)`
+                : '$0,00 (Al Día)'}
+            </span>
           </div>
         </div>
 

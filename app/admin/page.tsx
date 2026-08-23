@@ -72,18 +72,21 @@ export default function AdminDashboardPage() {
         pagosPorPedido.set(p.pedido_id, (pagosPorPedido.get(p.pedido_id) || 0) + Number(p.monto || 0));
       });
 
-      // Deuda por cliente
-      const deudaPorCliente = new Map<string, number>();
-      let montoTotalDeuda = 0;
+      // Saldo por cliente desde movimientos_saldo
+      const saldoMovsPorCliente = new Map<string, number>();
+      saldoMovs.forEach((s: any) => {
+        saldoMovsPorCliente.set(s.cliente_id, (saldoMovsPorCliente.get(s.cliente_id) || 0) + Number(s.monto || 0));
+      });
 
+      // Deuda por pedidos no saldados
+      const deudaPedidosPorCliente = new Map<string, number>();
       pedidos
         .filter((p) => p.estado !== 'cancelado')
         .forEach((p) => {
           const pagado = pagosPorPedido.get(p.id) || 0;
           const deuda = Math.max(0, Number(p.total || 0) - pagado);
           if (deuda > 0) {
-            deudaPorCliente.set(p.cliente_id, (deudaPorCliente.get(p.cliente_id) || 0) + deuda);
-            montoTotalDeuda += deuda;
+            deudaPedidosPorCliente.set(p.cliente_id, (deudaPedidosPorCliente.get(p.cliente_id) || 0) + deuda);
           }
         });
 
@@ -100,25 +103,29 @@ export default function AdminDashboardPage() {
         })
         .reduce((sum, p) => sum + Number(p.total || 0), 0);
 
-      // Saldo a favor total por cliente
-      const saldoPorCliente = new Map<string, number>();
-      saldoMovs.forEach((s: any) => {
-        saldoPorCliente.set(s.cliente_id, (saldoPorCliente.get(s.cliente_id) || 0) + Number(s.monto || 0));
+      // Calcular Saldo Neto Unificado por cliente
+      let montoTotalDeuda = 0;
+      let saldoTotalAFavor = 0;
+      const rankingDeuda: { cliente: Cliente; deuda: number }[] = [];
+
+      clientes.forEach((c) => {
+        const balanceMovs = saldoMovsPorCliente.get(c.id) || 0;
+        const deudaPed = deudaPedidosPorCliente.get(c.id) || 0;
+        const saldoNeto = balanceMovs - deudaPed;
+
+        if (saldoNeto < 0) {
+          const deuda = Math.abs(saldoNeto);
+          montoTotalDeuda += deuda;
+          rankingDeuda.push({ cliente: c, deuda });
+        } else if (saldoNeto > 0) {
+          saldoTotalAFavor += saldoNeto;
+        }
       });
-      const saldoTotal = Array.from(saldoPorCliente.values()).reduce((sum, s) => sum + Math.max(0, s), 0);
+
+      rankingDeuda.sort((a, b) => b.deuda - a.deuda);
 
       // Pedidos pendientes
       const pendientes = pedidos.filter((p) => p.estado === 'pendiente').length;
-
-      // Top clientes con mayor deuda
-      const rankingDeuda: { cliente: Cliente; deuda: number }[] = [];
-      deudaPorCliente.forEach((deuda, cId) => {
-        const cObj = clientes.find((c) => c.id === cId);
-        if (cObj && deuda > 0) {
-          rankingDeuda.push({ cliente: cObj, deuda });
-        }
-      });
-      rankingDeuda.sort((a, b) => b.deuda - a.deuda);
 
       setMetricas({
         pedidosPendientes: pendientes,
@@ -127,7 +134,7 @@ export default function AdminDashboardPage() {
         totalClientes: clientes.length,
         montoTotalDeuda,
         facturacionMes,
-        saldoAFavorTotal: saldoTotal,
+        saldoAFavorTotal: saldoTotalAFavor,
         totalFiltros: countFiltros || 0,
         totalVehiculos: countVehiculos || 0,
         totalPresupuestos: listaPresupuestos.length,

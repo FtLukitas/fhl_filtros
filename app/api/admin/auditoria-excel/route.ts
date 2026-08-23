@@ -17,6 +17,11 @@ interface FilaVehiculoInput {
   filtro_asociado: string;
 }
 
+interface FilaPrecioInput {
+  codigo: string;
+  precio: number;
+}
+
 interface AlertaFila {
   index: number;
   codigo: string;
@@ -25,13 +30,83 @@ interface AlertaFila {
   mensaje: string;
   sugerencia: string;
 }
+async function llamarOpenRouterConReintentos(
+  apiKey: string,
+  payload: any,
+  maxReintentosGLM: number = 10
+): Promise<{ ok: boolean; data?: any; modeloUsado?: string }> {
+  // 1. Intentar hasta 10 veces con z-ai/glm-5.2:free
+  for (let intento = 1; intento <= maxReintentosGLM; intento++) {
+    try {
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        signal: AbortSignal.timeout(14000),
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'https://fhlfiltros.com.ar',
+          'X-Title': 'FHL Filtros Auditor IA',
+        },
+        body: JSON.stringify({ ...payload, model: 'z-ai/glm-5.2:free' }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        return { ok: true, data, modeloUsado: 'z-ai/glm-5.2:free' };
+      }
+
+      if (res.status === 429 && intento < maxReintentosGLM) {
+        await new Promise((r) => setTimeout(r, 600 + intento * 150));
+        continue;
+      }
+    } catch (e) {
+      if (intento < maxReintentosGLM) {
+        await new Promise((r) => setTimeout(r, 600));
+        continue;
+      }
+    }
+  }
+
+  // 2. Si fallaron los 10 intentos de GLM 5.2, pasar a los fallbacks:
+  const fallbacks = [
+    'nvidia/nemotron-3-super-120b-a12b:free',
+    'nvidia/nemotron-3-nano-30b-a3b:free',
+    'openrouter/free',
+  ];
+
+  for (const mod of fallbacks) {
+    try {
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        signal: AbortSignal.timeout(12000),
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'https://fhlfiltros.com.ar',
+          'X-Title': 'FHL Filtros Auditor IA Fallback',
+        },
+        body: JSON.stringify({ ...payload, model: mod }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        return { ok: true, data, modeloUsado: mod };
+      }
+    } catch (e) {
+      console.warn(`Fallback a ${mod} falló:`, e);
+    }
+  }
+
+  return { ok: false };
+}
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { tipo, filas, temperatura = 0.0 } = body as {
-      tipo: 'filtros' | 'vehiculos';
-      filas: (FilaFiltroInput | FilaVehiculoInput)[];
+    const { tipo, filas, catalogoReferencia, temperatura = 0.0 } = body as {
+      tipo: 'filtros' | 'vehiculos' | 'normalizar_precios';
+      filas: any[];
+      catalogoReferencia?: { codigo_fhl: string; equivalencias: string; precio: number }[];
       temperatura?: number;
     };
 
@@ -41,7 +116,150 @@ export async function POST(req: NextRequest) {
 
     const apiKey = process.env.OPENROUTER_API_KEY;
 
-    // 1. Análisis Algorítmico Heurístico de Alta Precisión (Fallas duras garantizadas)
+    // CASO 1: NORMALIZADOR Y AUDITOR DE LISTAS DE PRECIOS
+    if (tipo === 'normalizar_precios') {
+      const mapaEquivalencias = new Map<string, string>();
+      const codigosFHLSet = new Set<string>();
+
+      (catalogoReferencia || []).forEach((f) => {
+        const codFhl = (f.codigo_fhl || '').trim().toUpperCase();
+        if (codFhl) {
+          codigosFHLSet.add(codFhl);
+          mapaEquivalencias.set(codFhl, codFhl);
+          const eqStr = (f.equivalencias || '').toUpperCase();
+          const tokens = eqStr.split(/[,/;\n]+/).map((t) => t.trim().replace(/[\s-]/g, '')).filter(Boolean);
+          tokens.forEach((t) => mapaEquivalencias.set(t, codFhl));
+        }
+      });
+
+      let itemsNormalizados: {
+        codigo_fhl: string;
+        precio: number;
+        codigoOriginal: string;
+        fueMapeado: boolean;
+        nota?: string;
+      }[] = [];
+
+      let scoreSalud = 95;
+      let dictamen = 'Aprobado';
+      let resumen = 'Precios validados y códigos estandarizados correctamente.';
+      let modeloUsado = 'algoritmo-local';
+
+      if (apiKey) {
+        const systemPrompt = `Sos el Auditor y Normalizador de Precios de FHL Filtros (Argentina).
+Tu tarea es tomar una lista de productos y precios desordenados y normalizarlos con precisión:
+1. Normalizar códigos FHL (ej: "101", "fhl 101" -> "FHL-101").
+2. Si el código corresponde a otra marca (Mann CU, Fram CF, Wega AKX, Mahle LA, OEM), consultá las equivalencias y asignale su código FHL-XXX equivalente.
+3. Asegurar precios numéricos válidos.
+4. Devolvé ÚNICAMENTE un JSON válido con esta estructura:
+{
+  "scoreSalud": <0 a 100>,
+  "dictamen": <"Aprobado" | "Advertencias" | "Riesgoso">,
+  "resumen": <texto de 2 o 3 oraciones explicando los cambios realizados>,
+  "items": [
+    {
+      "codigo_fhl": <código normalizado FHL-XXX>,
+      "precio": <precio numérico limpio>,
+      "codigoOriginal": <código tal como venía en la lista>,
+      "fueMapeado": <true si fue traducido desde otra marca o modificado, false si ya era FHL exacto>,
+      "nota": <motivo del cambio o advertencia>
+    }
+  ]
+}`;
+
+        const userPrompt = `CATÁLOGO DE EQUIVALENCIAS CONOCIDAS FHL:
+${JSON.stringify((catalogoReferencia || []).slice(0, 100).map((f) => ({ fhl: f.codigo_fhl, equiv: f.equivalencias })), null, 2)}
+
+LISTA CRUDA A NORMALIZAR Y AUDITAR (${filas.length} ítems):
+${JSON.stringify(filas.slice(0, 150), null, 2)}`;
+
+        const respuestaIA = await llamarOpenRouterConReintentos(apiKey, {
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+          temperature: Math.max(0.0, Math.min(1.0, temperatura)),
+          top_p: 0.1,
+          max_tokens: 3500,
+        }, 10);
+
+        if (respuestaIA.ok && respuestaIA.data) {
+          const rawContent = respuestaIA.data.choices?.[0]?.message?.content || '';
+          const match = rawContent.match(/\{[\s\S]*\}/);
+          if (match) {
+            try {
+              const parsed = JSON.parse(match[0]);
+              if (Array.isArray(parsed.items) && parsed.items.length > 0) {
+                itemsNormalizados = parsed.items;
+                scoreSalud = parsed.scoreSalud ?? 90;
+                dictamen = parsed.dictamen ?? 'Aprobado';
+                resumen = parsed.resumen ?? 'Planilla normalizada con éxito por IA.';
+                modeloUsado = respuestaIA.modeloUsado || 'z-ai/glm-5.2:free';
+              }
+            } catch (err) {
+              console.warn('Error al parsear JSON de IA:', err);
+            }
+          }
+        }
+      }
+
+      // Respaldo heurístico si no respondió la IA
+      if (itemsNormalizados.length === 0) {
+        itemsNormalizados = filas.map((f: any) => {
+          const raw = String(f.codigo || f.codigo_fhl || f.Filtro || '').trim();
+          let codNorm = raw.toUpperCase();
+          let fueMapeado = false;
+          let nota = '';
+
+          const numMatch = codNorm.match(/^(\d{1,4})$/);
+          if (numMatch) {
+            codNorm = `FHL-${numMatch[1].padStart(3, '0')}`;
+            fueMapeado = true;
+            nota = 'Formato normalizado a FHL-XXX';
+          } else if (codNorm.startsWith('FHL') && !codNorm.startsWith('FHL-')) {
+            codNorm = `FHL-${codNorm.slice(3).trim().padStart(3, '0')}`;
+            fueMapeado = true;
+            nota = 'Prefijo estandarizado a FHL-XXX';
+          }
+
+          const cleanToken = raw.toUpperCase().replace(/[\s-]/g, '');
+          if (mapaEquivalencias.has(cleanToken)) {
+            const mappedFhl = mapaEquivalencias.get(cleanToken)!;
+            if (mappedFhl !== codNorm) {
+              codNorm = mappedFhl;
+              fueMapeado = true;
+              nota = `Mapeado por equivalencia desde ${raw}`;
+            }
+          }
+
+          const precioNum = typeof f.precio === 'number' ? f.precio : parseFloat(String(f.precio || 0).replace(/[^0-9.]/g, '')) || 0;
+
+          return {
+            codigo_fhl: codNorm,
+            precio: precioNum,
+            codigoOriginal: raw,
+            fueMapeado,
+            nota: nota || (precioNum <= 0 ? 'Precio en $0' : undefined),
+          };
+        });
+      }
+
+      itemsNormalizados.sort((a, b) => a.codigo_fhl.localeCompare(b.codigo_fhl, 'es', { numeric: true }));
+
+      return NextResponse.json({
+        success: true,
+        modeloUsado,
+        auditoria: {
+          scoreSalud,
+          dictamen,
+          resumen,
+          totalFilas: itemsNormalizados.length,
+          items: itemsNormalizados,
+        },
+      });
+    }
+
+    // CASO 2: AUDITORÍA DE PRODUCTOS (TABLA A O TABLA B)
     const alertasHeuristicas: AlertaFila[] = [];
     const codigosVistos = new Set<string>();
 
@@ -52,7 +270,6 @@ export async function POST(req: NextRequest) {
         const dim = (f.dimensiones || '').trim();
         const equiv = (f.equivalencias || '').trim();
 
-        // Código vacío o mal formado
         if (!codigo || codigo === '—') {
           alertasHeuristicas.push({
             index: idx + 1,
@@ -75,7 +292,6 @@ export async function POST(req: NextRequest) {
           codigosVistos.add(codigo);
         }
 
-        // Precios anómalos
         if (precio <= 0) {
           alertasHeuristicas.push({
             index: idx + 1,
@@ -96,7 +312,6 @@ export async function POST(req: NextRequest) {
           });
         }
 
-        // Dimensiones
         if (!dim) {
           alertasHeuristicas.push({
             index: idx + 1,
@@ -124,7 +339,6 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        // Equivalencias
         if (equiv && !equiv.includes(',') && !equiv.includes('/') && equiv.length > 20) {
           alertasHeuristicas.push({
             index: idx + 1,
@@ -137,7 +351,6 @@ export async function POST(req: NextRequest) {
         }
       });
     } else {
-      // Vehículos
       (filas as FilaVehiculoInput[]).forEach((v, idx) => {
         const marca = (v.marca || '').trim().toUpperCase();
         const modelo = (v.modelo || '').trim().toUpperCase();
@@ -171,11 +384,9 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 2. Consulta a OpenRouter para Dictamen Ejecutivo y Análisis Semántico
     let resultadoIA = null;
     let modeloUsado = 'reglas-internas';
 
-    // Métricas estadísticas avanzadas para alimentar la IA
     const estadisticas = tipo === 'filtros' ? {
       totalFiltros: filas.length,
       sinPrecio: (filas as FilaFiltroInput[]).filter(f => !f.precio || f.precio <= 0).length,
@@ -215,55 +426,33 @@ ${JSON.stringify(alertasHeuristicas.slice(0, 50), null, 2)}
 MUESTRA REPRESENTATIVA DE FILAS:
 ${JSON.stringify(filas.slice(0, 25), null, 2)}`;
 
-      const modelos = [
-        'nvidia/nemotron-3-nano-30b-a3b:free',
-        'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
-        'openrouter/free'
-      ];
+      const respuestaIA = await llamarOpenRouterConReintentos(apiKey, {
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: Math.max(0.0, Math.min(1.0, temperatura)),
+        top_p: 0.1,
+        max_tokens: 800,
+      }, 10);
 
-      for (const mod of modelos) {
-        try {
-          const aiRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-            method: 'POST',
-            signal: AbortSignal.timeout(8000),
-            headers: {
-              'Authorization': `Bearer ${apiKey}`,
-              'Content-Type': 'application/json',
-              'HTTP-Referer': 'https://fhlfiltros.com.ar',
-              'X-Title': 'FHL Filtros Auditor IA'
-            },
-            body: JSON.stringify({
-              model: mod,
-              messages: [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: userPrompt }
-              ],
-              temperature: Math.max(0.0, Math.min(1.0, temperatura)),
-              top_p: 0.1,
-              max_tokens: 800
-            })
-          });
-
-          if (aiRes.ok) {
-            const aiData = await aiRes.json();
-            const rawContent = aiData.choices?.[0]?.message?.content || '';
-            const match = rawContent.match(/\{[\s\S]*\}/);
-            if (match) {
-              const parsed = JSON.parse(match[0]);
-              if (parsed.scoreSalud !== undefined && parsed.dictamen) {
-                resultadoIA = parsed;
-                modeloUsado = mod;
-                break;
-              }
+      if (respuestaIA.ok && respuestaIA.data) {
+        const rawContent = respuestaIA.data.choices?.[0]?.message?.content || '';
+        const match = rawContent.match(/\{[\s\S]*\}/);
+        if (match) {
+          try {
+            const parsed = JSON.parse(match[0]);
+            if (parsed.scoreSalud !== undefined && parsed.dictamen) {
+              resultadoIA = parsed;
+              modeloUsado = respuestaIA.modeloUsado || 'z-ai/glm-5.2:free';
             }
+          } catch (err) {
+            console.warn('Error al parsear dictamen IA:', err);
           }
-        } catch (e) {
-          console.warn(`Fallback al siguiente modelo tras error en ${mod}:`, e);
         }
       }
     }
 
-    // 3. Consolidar Diagnóstico Final
     const totalFilas = filas.length;
     const penalizacion = alertasHeuristicas.reduce((acc, a) => {
       if (a.severidad === 'alta') return acc + 15;
@@ -308,3 +497,4 @@ ${JSON.stringify(filas.slice(0, 25), null, 2)}`;
     return NextResponse.json({ error: error.message || 'Error interno del servidor' }, { status: 500 });
   }
 }
+

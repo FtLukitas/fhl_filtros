@@ -1,28 +1,10 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
-import type { Filtro, Vehiculo } from '@/lib/types';
-import ImportadorExcel from '../productos/components/ImportadorExcel';
-import MarkdownRenderer from '@/app/components/MarkdownRenderer';
-
-interface DiagnosticoIA {
-  scoreSalud: number;
-  dictamen: 'Aprobado' | 'Advertencias' | 'Riesgoso';
-  resumen: string;
-  totalFilas: number;
-  totalAlertas: number;
-  filasConAlerta: {
-    index: number;
-    codigo: string;
-    tipo: string;
-    severidad: string;
-    mensaje: string;
-    sugerencia: string;
-  }[];
-  recomendaciones: string[];
-}
+import type { Filtro, Vehiculo, ListaPrecio } from '@/lib/types';
+import ImportadorExcel from '@/app/admin/productos/components/ImportadorExcel';
+import MarkdownViewer from './components/MarkdownViewer';
 
 interface MensajeChat {
   id: string;
@@ -31,12 +13,42 @@ interface MensajeChat {
   timestamp: Date;
 }
 
-export default function PaginaAuditoria() {
+interface AlertaDetalle {
+  index: number;
+  codigo: string;
+  tipo: 'precio' | 'dimensiones' | 'codigo' | 'vehiculo' | 'inconsistencia';
+  severidad: 'baja' | 'media' | 'alta';
+  mensaje: string;
+  sugerencia: string;
+}
+
+interface DiagnosticoAuditoria {
+  scoreSalud: number;
+  dictamen: 'Aprobado' | 'Advertencias' | 'Riesgoso';
+  resumen: string;
+  totalFilas: number;
+  totalAlertas: number;
+  filasConAlerta: AlertaDetalle[];
+  recomendaciones: string[];
+}
+
+export default function AuditoriaAdminPage() {
   const [cargandoDatos, setCargandoDatos] = useState(true);
   const [auditandoIA, setAuditandoIA] = useState(false);
+
+  // Tablas en memoria
   const [filtros, setFiltros] = useState<Filtro[]>([]);
   const [vehiculos, setVehiculos] = useState<Vehiculo[]>([]);
-  const [diagnostico, setDiagnostico] = useState<DiagnosticoIA | null>(null);
+  const [clientes, setClientes] = useState<any[]>([]);
+  const [pedidos, setPedidos] = useState<any[]>([]);
+  const [itemsPedido, setItemsPedido] = useState<any[]>([]);
+  const [listasPrecios, setListasPrecios] = useState<ListaPrecio[]>([]);
+  const [itemsListaPrecio, setItemsListaPrecio] = useState<any[]>([]);
+  const [presupuestos, setPresupuestos] = useState<any[]>([]);
+  const [pagos, setPagos] = useState<any[]>([]);
+  const [movimientosSaldo, setMovimientosSaldo] = useState<any[]>([]);
+
+  const [diagnostico, setDiagnostico] = useState<DiagnosticoAuditoria | null>(null);
   const [modalImportar, setModalImportar] = useState<'filtros' | 'vehiculos' | null>(null);
   const [mostrarTablaDetalle, setMostrarTablaDetalle] = useState(false);
 
@@ -44,29 +56,104 @@ export default function PaginaAuditoria() {
   const [mensajes, setMensajes] = useState<MensajeChat[]>([]);
   const [inputMensaje, setInputMensaje] = useState('');
   const [enviandoMensaje, setEnviandoMensaje] = useState(false);
-  const [temperatura, setTemperatura] = useState<number>(0.0); // 0.0: Máxima precisión determinística
+  const [temperatura, setTemperatura] = useState<number>(0.0);
   const chatBottomRef = useRef<HTMLDivElement>(null);
 
   const cargarYAuditar = async () => {
     setCargandoDatos(true);
     try {
-      const [resFiltros, resVehiculos] = await Promise.all([
+      const [
+        resFiltros,
+        resVehiculos,
+        resClientes,
+        resPedidos,
+        resItemsPedido,
+        resListas,
+        resItemsListas,
+        resPresupuestos,
+        resPagos,
+        resMovimientosSaldo,
+      ] = await Promise.all([
         supabase.from('Tabla A').select('*').or('eliminado.is.null,eliminado.eq.false'),
         supabase.from('Tabla B').select('*').or('eliminado.is.null,eliminado.eq.false'),
+        supabase.from('clientes').select('*').eq('eliminado', false),
+        supabase.from('pedidos').select('*').order('created_at', { ascending: false }),
+        supabase.from('items_pedido').select('*'),
+        supabase.from('listas_precios').select('*'),
+        supabase.from('items_lista_precio').select('*'),
+        supabase.from('presupuestos').select('*'),
+        supabase.from('pagos').select('*'),
+        supabase.from('movimientos_saldo').select('*'),
       ]);
 
       const dataFiltros = (resFiltros.data as Filtro[]) || [];
       const dataVehiculos = (resVehiculos.data as Vehiculo[]) || [];
+      const dataClientes = resClientes.data || [];
+      const dataPedidos = resPedidos.data || [];
+      const dataItemsPedido = resItemsPedido.data || [];
+      const dataListas = (resListas.data as ListaPrecio[]) || [];
+      const dataItemsListas = resItemsListas.data || [];
+      const dataPresupuestos = resPresupuestos.data || [];
+      const dataPagos = resPagos.data || [];
+      const dataMovimientos = resMovimientosSaldo.data || [];
 
       setFiltros(dataFiltros);
       setVehiculos(dataVehiculos);
+      setClientes(dataClientes);
+      setPedidos(dataPedidos);
+      setItemsPedido(dataItemsPedido);
+      setListasPrecios(dataListas);
+      setItemsListaPrecio(dataItemsListas);
+      setPresupuestos(dataPresupuestos);
+      setPagos(dataPagos);
+      setMovimientosSaldo(dataMovimientos);
+
+      // Calcular mapa de pagos por pedido
+      const pagosMap = new Map<string, number>();
+      dataPagos.forEach((p: any) => {
+        if (p.pedido_id) {
+          pagosMap.set(p.pedido_id, (pagosMap.get(p.pedido_id) || 0) + Number(p.monto || 0));
+        }
+      });
+
+      // Calcular deuda por pedidos impagos agrupados por cliente
+      const deudaPedidosMap = new Map<string, number>();
+      dataPedidos.forEach((p: any) => {
+        if (p.eliminado || p.estado === 'cancelado') return;
+        const total = Number(p.total || 0);
+        const abonado = pagosMap.get(p.id) || 0;
+        const pendiente = Math.max(0, total - abonado);
+        if (p.cliente_id && pendiente > 0) {
+          deudaPedidosMap.set(p.cliente_id, (deudaPedidosMap.get(p.cliente_id) || 0) + pendiente);
+        }
+      });
+
+      // Calcular saldo en cuenta corriente por cliente (movimientos_saldo con signo)
+      const balanceMovimientosMap = new Map<string, number>();
+      dataMovimientos.forEach((m: any) => {
+        if (m.cliente_id) {
+          balanceMovimientosMap.set(
+            m.cliente_id,
+            (balanceMovimientosMap.get(m.cliente_id) || 0) + Number(m.monto || 0)
+          );
+        }
+      });
+
+      // Calcular saldo neto de cada cliente
+      let deudaTotalCalculada = 0;
+      dataClientes.forEach((c: any) => {
+        const deudaPed = deudaPedidosMap.get(c.id) || 0;
+        const balanceMov = balanceMovimientosMap.get(c.id) || 0;
+        const saldoNeto = balanceMov - deudaPed; // (+) a favor, (-) deuda
+        if (saldoNeto < 0) deudaTotalCalculada += Math.abs(saldoNeto);
+      });
 
       // Iniciar mensaje de bienvenida del chat
       setMensajes([
         {
           id: 'msg-bienvenida',
           rol: 'assistant',
-          texto: `¡Hola! Soy tu **Auditor Técnico y de Calidad de FHL Filtros**.\n\nTengo acceso directo e indexado a tus **${dataFiltros.length} filtros de habitáculo** y **${dataVehiculos.length} aplicaciones de vehículos** en la base de datos.\n\nPodés pedirme auditorías específicas, tablas comparativas por marca o modelo, detección de filtros sin medidas o análisis de precios.`,
+          texto: `¡Hola! Soy tu **Auditor Integral de FHL Filtros**.\n\nTengo acceso en tiempo real a **todas las tablas de la empresa**:\n* 📦 **${dataFiltros.length} Filtros de Habitáculo** (Tabla A)\n* 🚗 **${dataVehiculos.length} Aplicaciones de Vehículos** (Tabla B)\n* 👥 **${dataClientes.length} Clientes** (Deuda total consolidada a cobrar: **$${deudaTotalCalculada.toLocaleString('es-AR', { minimumFractionDigits: 2 })}**)\n* 🧾 **${dataPedidos.length} Pedidos de Facturación** (${dataItemsPedido.length} ítems despachados)\n* 🏷️ **${dataListas.length} Listas de Precios** (${dataItemsListas.length} precios por producto)\n* 📄 **${dataPresupuestos.length} Presupuestos** cotizados\n\nPodés pedirme auditorías de precios, extractos de deuda por cliente, rankings de los filtros más vendidos, o comparativas de compatibilidad.`,
           timestamp: new Date(),
         },
       ]);
@@ -99,7 +186,6 @@ export default function PaginaAuditoria() {
     cargarYAuditar();
   }, []);
 
-  // Auto-scroll del chat al agregar mensajes
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [mensajes, enviandoMensaje]);
@@ -114,6 +200,47 @@ export default function PaginaAuditoria() {
   const vehiculosHuerfanos = vehiculos.filter(
     (v) => v.filtro_asociado && !codigosFiltros.has(v.filtro_asociado.trim().toUpperCase())
   );
+
+  // Mapa de pagos para cálculos de KPI
+  const pagosMapGlobal = new Map<string, number>();
+  pagos.forEach((p) => {
+    if (p.pedido_id) {
+      pagosMapGlobal.set(p.pedido_id, (pagosMapGlobal.get(p.pedido_id) || 0) + Number(p.monto || 0));
+    }
+  });
+
+  const deudaPedidosMapGlobal = new Map<string, number>();
+  pedidos.forEach((p) => {
+    if (p.eliminado || p.estado === 'cancelado') return;
+    const total = Number(p.total || 0);
+    const abonado = pagosMapGlobal.get(p.id) || 0;
+    const pendiente = Math.max(0, total - abonado);
+    if (p.cliente_id && pendiente > 0) {
+      deudaPedidosMapGlobal.set(p.cliente_id, (deudaPedidosMapGlobal.get(p.cliente_id) || 0) + pendiente);
+    }
+  });
+
+  const balanceMovimientosMapGlobal = new Map<string, number>();
+  movimientosSaldo.forEach((m) => {
+    if (m.cliente_id) {
+      balanceMovimientosMapGlobal.set(
+        m.cliente_id,
+        (balanceMovimientosMapGlobal.get(m.cliente_id) || 0) + Number(m.monto || 0)
+      );
+    }
+  });
+
+  let deudaTotalClientes = 0;
+  clientes.forEach((c) => {
+    const deuda = deudaPedidosMapGlobal.get(c.id) || 0;
+    const balanceMov = balanceMovimientosMapGlobal.get(c.id) || 0;
+    const saldoNeto = balanceMov - deuda;
+    if (saldoNeto < 0) deudaTotalClientes += Math.abs(saldoNeto);
+  });
+
+  const facturacionTotalPedidos = pedidos
+    .filter((p) => !p.eliminado && p.estado !== 'cancelado')
+    .reduce((acc, p) => acc + Number(p.total || 0), 0);
 
   const enviarMensajeChat = async (texto: string) => {
     const textoAEnviar = texto.trim();
@@ -132,7 +259,7 @@ export default function PaginaAuditoria() {
     setEnviandoMensaje(true);
 
     try {
-      // 1. Construir mapa de conteo de aplicaciones de vehículos por filtro
+      // 1. Mapa de vehículos por filtro
       const conteoVehiculosPorFiltro = new Map<string, number>();
       const vehiculosPorMarca = new Map<string, { total: number; modelos: Set<string>; filtros: Set<string> }>();
 
@@ -154,19 +281,89 @@ export default function PaginaAuditoria() {
         }
       });
 
-      // Resumen estructurado y de alta resolución del catálogo completo (100% de los datos)
+      // 2. Ranking de filtros más vendidos
+      const ventasPorFiltro = new Map<string, { cantidad: number; totalFacturado: number }>();
+      itemsPedido.forEach((it) => {
+        const cod = (it.codigo_fhl || '').trim().toUpperCase();
+        if (cod) {
+          const actual = ventasPorFiltro.get(cod) || { cantidad: 0, totalFacturado: 0 };
+          ventasPorFiltro.set(cod, {
+            cantidad: actual.cantidad + (it.cantidad || 0),
+            totalFacturado: actual.totalFacturado + (Number(it.subtotal) || (Number(it.precio_unitario || 0) * (it.cantidad || 0))),
+          });
+        }
+      });
+
+      const rankingMasVendidos = Array.from(ventasPorFiltro.entries())
+        .map(([codigo_fhl, data]) => ({ codigo_fhl, ...data }))
+        .sort((a, b) => b.cantidad - a.cantidad);
+
+      // 3. Mapa de clientes con saldo neto exacto (incluye deuda de pedidos y saldo en cuenta corriente)
+      const mapaListas = new Map<string, string>();
+      listasPrecios.forEach((l) => mapaListas.set(String(l.id), l.nombre));
+
+      const clientesResumen = clientes.map((c) => {
+        const deudaPedidos = deudaPedidosMapGlobal.get(c.id) || 0;
+        const balanceMov = balanceMovimientosMapGlobal.get(c.id) || 0;
+        const saldoNeto = balanceMov - deudaPedidos;
+        const totalDeudaReal = saldoNeto < 0 ? Math.abs(saldoNeto) : 0;
+        const totalSaldoAFavor = saldoNeto > 0 ? saldoNeto : 0;
+
+        return {
+          id: c.id,
+          nombre: c.nombre,
+          deuda_pedidos_facturados: deudaPedidos,
+          ajustes_saldo_cuenta_corriente: balanceMov,
+          deuda_total_real_a_cobrar: totalDeudaReal,
+          saldo_a_favor_disponible: totalSaldoAFavor,
+          resumen_cuenta: totalDeudaReal > 0
+            ? `Deudor: Debe $${totalDeudaReal.toLocaleString('es-AR')} (Pedidos: $${deudaPedidos.toLocaleString('es-AR')}${balanceMov < 0 ? ` + Ajuste Deudor Cta Cte: $${Math.abs(balanceMov).toLocaleString('es-AR')}` : balanceMov > 0 ? ` - Saldo a Favor: $${balanceMov.toLocaleString('es-AR')}` : ''})`
+            : totalSaldoAFavor > 0
+            ? `A Favor: Tiene $${totalSaldoAFavor.toLocaleString('es-AR')} a favor disponible`
+            : 'Al Día ($0,00)',
+          lista_precio_asignada: mapaListas.get(String(c.lista_precio_id)) || 'Lista Base (Por Defecto)',
+          direccion: c.direccion || '—',
+          condicion_iva: c.condicion_iva || 'Consumidor Final',
+          tipo_cliente: c.tipo_cliente || 'Mayorista',
+        };
+      }).sort((a, b) => b.deuda_total_real_a_cobrar - a.deuda_total_real_a_cobrar);
+
+      // 4. Mapa de pedidos
+      const mapaClientes = new Map<string, string>();
+      clientes.forEach((c) => mapaClientes.set(String(c.id), c.nombre));
+
+      const pedidosResumen = pedidos.map((p) => ({
+        id: p.id,
+        cliente: mapaClientes.get(String(p.cliente_id)) || 'Cliente Desconocido',
+        total: Number(p.total || 0),
+        estado: p.estado || 'pendiente',
+        pagado: p.pagado ? 'SÍ' : 'NO / PENDIENTE',
+        fecha: p.created_at ? new Date(p.created_at).toLocaleDateString('es-AR') : '—',
+      }));
+
+      // CONTEXTO INTEGRAL DE TODAS LAS TABLAS DE FHL
       const contextoCatalogo = {
-        metricasGenerales: {
-          totalFiltrosEnCatalogo: filtros.length,
-          totalAplicacionesVehiculos: vehiculos.length,
-          marcasDeVehiculosRegistradas: vehiculosPorMarca.size,
-          filtrosOcultosEnWeb: ocultosWeb.length,
-          filtrosSinPrecio: sinPrecio.length,
-          filtrosPrecioAtipicoMayorA100k: precioAtipico.length,
-          filtrosSinMedidas: sinDimensiones.length,
-          vehiculosHuerfanosSinFiltroValido: vehiculosHuerfanos.length,
+        resumenEmpresa: {
+          totalFiltros: filtros.length,
+          totalVehiculos: vehiculos.length,
+          totalClientes: clientes.length,
+          deudaTotalClientesNeta: deudaTotalClientes,
+          totalPedidos: pedidos.length,
+          facturacionTotal: facturacionTotalPedidos,
+          totalListasPrecios: listasPrecios.length,
         },
-        diagnosticoCritico: {
+        clientes: clientesResumen,
+        pedidosRecientes: pedidosResumen.slice(0, 50),
+        rankingFiltrosMasVendidos: rankingMasVendidos.slice(0, 30),
+        listasPrecios: listasPrecios.map((l) => ({
+          id: l.id,
+          nombre: l.nombre,
+          tipo_ajuste: l.tipo_ajuste,
+          porcentaje: l.porcentaje,
+          activa: l.activa,
+        })),
+        presupuestos: presupuestos.slice(0, 20),
+        diagnosticoCriticoCatalogo: {
           codigosSinPrecio: sinPrecio.map((f) => f.codigo_fhl),
           codigosPrecioAtipico: precioAtipico.map((f) => ({ codigo: f.codigo_fhl, precio: f.precio })),
           codigosSinMedidas: sinDimensiones.map((f) => f.codigo_fhl),
@@ -175,8 +372,8 @@ export default function PaginaAuditoria() {
         resumenVehiculosPorMarca: Array.from(vehiculosPorMarca.entries()).map(([marca, data]) => ({
           marca,
           totalAplicaciones: data.total,
-          modelosPrincipales: Array.from(data.modelos).slice(0, 10),
-          filtrosFHLUtilizados: Array.from(data.filtros).slice(0, 10),
+          modelosPrincipales: Array.from(data.modelos).slice(0, 15),
+          filtrosFHLUtilizados: Array.from(data.filtros).slice(0, 15),
         })),
         catalogoCompletoFiltros: filtros.map((f) => ({
           codigo_fhl: f.codigo_fhl,
@@ -189,26 +386,31 @@ export default function PaginaAuditoria() {
         })),
       };
 
-      // Formatear historial reciente para OpenRouter
       const historialOpenRouter = nuevosMensajes.slice(-8).map((m) => ({
         role: m.rol === 'user' ? ('user' as const) : ('assistant' as const),
         content: m.texto,
       }));
 
-      const systemPrompt = `Sos el Auditor Técnico Principal y Experto en Catálogo Automotriz de la fábrica "FHL Filtros" (Argentina).
-Tenés acceso al 100% de los datos reales del catálogo (${filtros.length} filtros y ${vehiculos.length} vehículos).
+      const systemPrompt = `Sos el Auditor Integral, Analista de Negocio y Experto Técnico de "FHL Filtros" (fábrica de filtros de habitáculo de Argentina).
+Tenés acceso al 100% de las tablas y bases de datos reales de la empresa:
+- Catálogo de Filtros (Tabla A: ${filtros.length} filtros con medidas, equivalencias y precios base).
+- Aplicaciones Vehiculares (Tabla B: ${vehiculos.length} compatibilidades por marca, modelo y año).
+- Clientes y Cuentas Corrientes (${clientes.length} clientes con saldos deudores de cuenta corriente).
+- Pedidos y Facturación (${pedidos.length} pedidos históricos y detalle de despachos).
+- Listas de Precios (${listasPrecios.length} listas comerciales y precios diferenciales).
+- Presupuestos y Cotizaciones.
 
-DIRECTIVAS DE MÁXIMA PRECISIÓN Y EXACTITUD (Temperatura configurada: ${temperatura}):
-1. CERO ALUCINACIONES: Toda respuesta debe basarse ESTRICTAMENTE en los datos reales del catálogo adjunto.
-2. CONOCIMIENTO DE DOMINIO AUTOMOTRIZ:
-   - Filtros de habitáculo / cabina (polen y carbón activado).
-   - Equivalencias cruzadas habituales: Wega (AKX/AKX-C), Fram (CF), Mann Filter (CU/CUK), Mahle (LA/LAK), Bosch (0986...), Tecfil (ACP).
-   - Formato estándar de medidas en milímetros (Largo x Ancho x Alto).
-3. GENERACIÓN DE TABLAS MARKDOWN: Siempre que te soliciten listados, precios, comparaciones o marcas, formatealo en TABLAS MARKDOWN completas (| Código | Dimensiones | Precio | ... |).
-4. SINTAXIS Y FORMATO: Usá Markdown enriquecido: negritas **...**, listas ordenadas o viñetas, código \`...\` y secciones con encabezados ###.
-5. Respuestas en español neutro rioplatense, sumamente analíticas, claras, ejecutivas y precisas.`;
+REGLAS FINANCIERAS Y DE SALDOS DE CUENTA CORRIENTE:
+1. DEUDA NETA REAL (LO QUE DEBEN): Es la Deuda Bruta de Pedidos MENOS el Saldo a Favor del cliente.
+   - Cuando te pregunten sobre deudas de clientes, mostrá siempre:
+     * Deuda Bruta de Pedidos
+     * Saldo a Favor Descontado
+     * Deuda Neta Final a Pagar (lo que realmente deben)
+2. DIRECTIVAS DE MÁXIMA PRECISIÓN Y EXACTITUD (Temperatura: ${temperatura}):
+   - CERO ALUCINACIONES: Toda respuesta debe basarse ESTRICTAMENTE en los datos reales suministrados.
+   - GENERACIÓN DE TABLAS MARKDOWN: Siempre formateá listados, deudas, estados de cuenta o comparaciones en TABLAS MARKDOWN completas (| Cliente | Deuda Pedidos | Saldo a Favor | Deuda Neta a Pagar |).
+   - Idioma: Español rioplatense profesional, claro, analítico y preciso.`;
 
-      // Llamar al endpoint del servidor que custodia la clave OPENROUTER_API_KEY de forma 100% segura
       const res = await fetch('/api/admin/auditoria-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -254,34 +456,33 @@ DIRECTIVAS DE MÁXIMA PRECISIÓN Y EXACTITUD (Temperatura configurada: ${tempera
   };
 
   const sugerenciasRapidas = [
-    '¿Qué filtros tienen precios mayores a $50.000?',
-    'Armame una tabla de filtros sin medidas',
-    '¿Hay vehículos huérfanos o con años futuros?',
-    'Dame un resumen ejecutivo de calidad',
+    '¿Cuáles son los clientes con mayor saldo deudor?',
+    '¿Qué filtros son los más vendidos en los pedidos?',
+    'Armame una tabla de filtros sin medidas o sin equivalencias',
     '¿Cuáles son los 5 filtros con más aplicaciones de autos?',
+    'Dame un resumen ejecutivo integral del negocio',
   ];
 
   return (
     <div className="flex flex-col gap-5">
-      
-      {/* Barra Superior Despejada */}
+      {/* Barra Superior */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white p-5 rounded-lg shadow-xs border border-slate-200/80">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
             <span className="text-[11px] font-bold text-blue-900 uppercase tracking-wider bg-blue-50 px-2 py-0.5 rounded border border-blue-100">
-              Control de Calidad IA
+              Auditor Integral IA
             </span>
-            <span className="text-[11px] text-slate-500 font-mono font-bold">Nemotron Nano Engine (~400ms)</span>
+            <span className="text-[11px] text-slate-500 font-mono font-bold">GLM 5.2 / Nemotron Engine • Acceso Total DB</span>
           </div>
           <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
-            Auditoría Inteligente de Catálogo y Cargas
+            Auditoría Inteligente de la Empresa
           </h1>
           <p className="text-xs text-slate-500 font-medium">
-            Inspección continua de precios, medidas, compatibilidades y asistente interactivo con soporte Markdown.
+            Inspección continua de catálogo (Tabla A y B), clientes, cuentas corrientes, pedidos, listas de precios y presupuestos.
           </p>
         </div>
 
-        {/* Acciones y Métricas Resumidas */}
+        {/* Acciones */}
         <div className="flex items-center gap-2 flex-wrap">
           <button
             onClick={() => setModalImportar('filtros')}
@@ -311,14 +512,14 @@ DIRECTIVAS DE MÁXIMA PRECISIÓN Y EXACTITUD (Temperatura configurada: ${tempera
                   <polyline points="23 4 23 10 17 10" />
                   <path d="M20.49 15a9 9 0 11-2.12-9.36L23 10" />
                 </svg>
-                <span>Re-analizar Catálogo</span>
+                <span>Re-analizar Todo</span>
               </>
             )}
           </button>
         </div>
       </div>
 
-      {/* Franja de Indicadores Rápidos sin bordes pesados */}
+      {/* Franja de Indicadores Rápidos de Todas las Tablas */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <div className="bg-white px-4 py-3 rounded-lg border border-slate-200/80 shadow-2xs">
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Filtros Activos</span>
@@ -329,197 +530,221 @@ DIRECTIVAS DE MÁXIMA PRECISIÓN Y EXACTITUD (Temperatura configurada: ${tempera
         </div>
 
         <div className="bg-white px-4 py-3 rounded-lg border border-slate-200/80 shadow-2xs">
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Vehículos</span>
+          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Vehículos (Tabla B)</span>
           <div className="flex items-baseline gap-1.5 mt-0.5">
             <span className="text-lg font-black text-slate-800">{vehiculos.length}</span>
             <span className="text-[10px] text-slate-400 font-medium">modelos</span>
           </div>
         </div>
 
-        <div className={`px-4 py-3 rounded-lg border shadow-2xs ${sinPrecio.length > 0 ? 'bg-red-50/70 border-red-200' : 'bg-white border-slate-200/80'}`}>
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Sin Precio ($0)</span>
-          <span className={`text-lg font-black mt-0.5 block ${sinPrecio.length > 0 ? 'text-red-700' : 'text-slate-800'}`}>
-            {sinPrecio.length}
+        <div className="bg-white px-4 py-3 rounded-lg border border-slate-200/80 shadow-2xs">
+          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Clientes Registrados</span>
+          <div className="flex items-baseline gap-1.5 mt-0.5">
+            <span className="text-lg font-black text-slate-800">{clientes.length}</span>
+            <span className="text-[10px] text-slate-400 font-medium">cuentas</span>
+          </div>
+        </div>
+
+        <div className={`px-4 py-3 rounded-lg border shadow-2xs ${deudaTotalClientes > 0 ? 'bg-amber-50/70 border-amber-200' : 'bg-white border-slate-200/80'}`}>
+          <span className="text-[10px] font-bold text-amber-800 uppercase tracking-wider block">Deuda Total Clientes</span>
+          <span className="text-base font-black font-mono text-amber-900 mt-0.5 block truncate">
+            ${deudaTotalClientes.toLocaleString('es-AR', { maximumFractionDigits: 0 })}
           </span>
         </div>
 
-        <div className={`px-4 py-3 rounded-lg border shadow-2xs ${precioAtipico.length > 0 ? 'bg-amber-50/70 border-amber-200' : 'bg-white border-slate-200/80'}`}>
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Precios &gt; $100k</span>
-          <span className={`text-lg font-black mt-0.5 block ${precioAtipico.length > 0 ? 'text-amber-700' : 'text-slate-800'}`}>
-            {precioAtipico.length}
+        <div className="bg-white px-4 py-3 rounded-lg border border-slate-200/80 shadow-2xs">
+          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Facturación Pedidos</span>
+          <span className="text-base font-black font-mono text-emerald-800 mt-0.5 block truncate">
+            ${facturacionTotalPedidos.toLocaleString('es-AR', { maximumFractionDigits: 0 })}
           </span>
         </div>
 
-        <div className={`px-4 py-3 rounded-lg border shadow-2xs ${sinDimensiones.length > 0 ? 'bg-amber-50/70 border-amber-200' : 'bg-white border-slate-200/80'}`}>
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Sin Medidas</span>
-          <span className={`text-lg font-black mt-0.5 block ${sinDimensiones.length > 0 ? 'text-amber-700' : 'text-slate-800'}`}>
-            {sinDimensiones.length}
-          </span>
-        </div>
-
-        <div className={`px-4 py-3 rounded-lg border shadow-2xs ${vehiculosHuerfanos.length > 0 ? 'bg-red-50/70 border-red-200' : 'bg-white border-slate-200/80'}`}>
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Huérfanos</span>
-          <span className={`text-lg font-black mt-0.5 block ${vehiculosHuerfanos.length > 0 ? 'text-red-700' : 'text-slate-800'}`}>
-            {vehiculosHuerfanos.length}
-          </span>
+        <div className="bg-white px-4 py-3 rounded-lg border border-slate-200/80 shadow-2xs">
+          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Listas de Precios</span>
+          <div className="flex items-baseline gap-1.5 mt-0.5">
+            <span className="text-lg font-black text-slate-800">{listasPrecios.length}</span>
+            <span className="text-[10px] text-slate-400 font-medium">activas</span>
+          </div>
         </div>
       </div>
 
-      {/* SECCIÓN PRINCIPAL: CHAT EXPANSIVO (HERO WORKSPACE) */}
-      <div className="bg-white rounded-lg shadow-sm border border-slate-200/90 flex flex-col flex-1 overflow-hidden min-h-[580px]">
-        
-        {/* Barra Superior del Chat */}
-        <div className="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-md bg-blue-600 flex items-center justify-center text-white shrink-0 shadow-xs">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
-                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-              </svg>
+      {/* Tarjeta de Diagnóstico IA */}
+      {diagnostico && (
+        <div className="bg-white rounded-lg border border-slate-200/80 p-5 shadow-2xs space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+            <div className="flex items-center gap-3">
+              <div
+                className={`h-12 w-12 rounded-xl flex items-center justify-center font-black text-lg ${
+                  diagnostico.dictamen === 'Aprobado'
+                    ? 'bg-emerald-100 text-emerald-800'
+                    : diagnostico.dictamen === 'Advertencias'
+                    ? 'bg-amber-100 text-amber-800'
+                    : 'bg-red-100 text-red-800'
+                }`}
+              >
+                {diagnostico.scoreSalud}%
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                    Score de Salud Técnica
+                  </span>
+                  <span
+                    className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ${
+                      diagnostico.dictamen === 'Aprobado'
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        : diagnostico.dictamen === 'Advertencias'
+                        ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                        : 'bg-red-50 text-red-700 border border-red-200'
+                    }`}
+                  >
+                    {diagnostico.dictamen}
+                  </span>
+                </div>
+                <h3 className="text-base font-black text-slate-800 mt-0.5">
+                  Diagnóstico Automático del Catálogo
+                </h3>
+              </div>
+            </div>
+
+            {diagnostico.filasConAlerta.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setMostrarTablaDetalle(!mostrarTablaDetalle)}
+                className="text-xs font-bold text-blue-900 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-md border border-blue-200 transition-colors cursor-pointer"
+              >
+                {mostrarTablaDetalle ? 'Ocultar Detalle' : `Ver ${diagnostico.filasConAlerta.length} Anomalías`}
+              </button>
+            )}
+          </div>
+
+          <p className="text-xs text-slate-700 leading-relaxed font-medium">
+            {diagnostico.resumen}
+          </p>
+
+          {/* Tabla de anomalías si se expande */}
+          {mostrarTablaDetalle && diagnostico.filasConAlerta.length > 0 && (
+            <div className="max-h-60 overflow-y-auto border border-slate-200 rounded-lg">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold sticky top-0 uppercase tracking-wider">
+                  <tr>
+                    <th className="p-2.5">Código</th>
+                    <th className="p-2.5">Severidad</th>
+                    <th className="p-2.5">Anomalía</th>
+                    <th className="p-2.5">Sugerencia</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {diagnostico.filasConAlerta.map((a, idx) => (
+                    <tr key={idx} className="hover:bg-slate-50">
+                      <td className="p-2.5 font-bold font-mono text-slate-900">{a.codigo}</td>
+                      <td className="p-2.5">
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                            a.severidad === 'alta'
+                              ? 'bg-red-100 text-red-800'
+                              : a.severidad === 'media'
+                              ? 'bg-amber-100 text-amber-800'
+                              : 'bg-slate-100 text-slate-700'
+                          }`}
+                        >
+                          {a.severidad.toUpperCase()}
+                        </span>
+                      </td>
+                      <td className="p-2.5 text-slate-700 font-medium">{a.mensaje}</td>
+                      <td className="p-2.5 text-slate-500">{a.sugerencia}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* SECCIÓN DEL CHAT INTERACTIVO CON IA */}
+      <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs flex flex-col h-[580px] overflow-hidden">
+        {/* Encabezado del chat */}
+        <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+          <div className="flex items-center gap-2.5">
+            <div className="h-8 w-8 rounded-full bg-blue-900 text-white flex items-center justify-center font-black text-xs shadow-xs">
+              IA
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-sm font-bold text-white tracking-wide">
-                  Chat Auditor IA de Catálogo
-                </h2>
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-500/20 text-emerald-300 rounded-full text-[10px] font-bold">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  Conectado
-                </span>
-                {diagnostico && (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
-                    Salud: {diagnostico.scoreSalud}% ({diagnostico.dictamen})
-                  </span>
-                )}
-              </div>
-              <p className="text-[11px] text-slate-400">
-                Preguntá en lenguaje natural. Soporta tablas, listas y análisis comparativos en Markdown.
-              </p>
+              <h3 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                <span>Auditor Integral FHL</span>
+                <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" title="Conectado y listo" />
+              </h3>
+              <span className="text-[10px] text-slate-400 font-mono">
+                Indexado a 9 tablas: Filtros, Vehículos, Clientes, Pedidos, Precios y Presupuestos
+              </span>
             </div>
           </div>
 
-          <div className="flex items-center gap-3 flex-wrap">
-            {/* Selector de Precisión / Temperatura */}
-            <div className="flex items-center gap-1 bg-slate-800 p-1 rounded-md border border-slate-700 text-xs">
-              <span className="text-[10px] text-slate-400 font-bold px-1.5 uppercase tracking-wider">
-                Precisión:
-              </span>
-              <button
-                type="button"
-                onClick={() => setTemperatura(0.0)}
-                className={`px-2 py-0.5 rounded text-[11px] font-bold transition-all cursor-pointer ${
-                  temperatura === 0.0
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-                title="Temperatura 0.0: Máxima exactitud matemática y fáctica sin inventar datos"
-              >
-                0.0 (Ultra Fino)
-              </button>
-              <button
-                type="button"
-                onClick={() => setTemperatura(0.2)}
-                className={`px-2 py-0.5 rounded text-[11px] font-bold transition-all cursor-pointer ${
-                  temperatura === 0.2
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-                title="Temperatura 0.2: Equilibrado con redacción fluida"
-              >
-                0.2 (Normal)
-              </button>
-              <button
-                type="button"
-                onClick={() => setTemperatura(0.5)}
-                className={`px-2 py-0.5 rounded text-[11px] font-bold transition-all cursor-pointer ${
-                  temperatura === 0.5
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-                title="Temperatura 0.5: Respuestas más abiertas y creativas"
-              >
-                0.5 (Creativo)
-              </button>
-            </div>
-
+          <div className="flex items-center gap-2">
             <button
+              type="button"
               onClick={() => {
                 setMensajes([
                   {
-                    id: `msg-${Date.now()}`,
+                    id: `msg-reset-${Date.now()}`,
                     rol: 'assistant',
-                    texto: 'Conversación reiniciada. ¿En qué te puedo ayudar sobre el catálogo?',
+                    texto: 'Conversación reiniciada. ¿Qué datos del catálogo, pedidos o clientes querés consultar?',
                     timestamp: new Date(),
                   },
                 ]);
               }}
-              className="text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded hover:bg-slate-800 transition-colors cursor-pointer font-semibold"
+              className="text-[11px] text-slate-500 hover:text-slate-800 font-bold px-2.5 py-1 rounded hover:bg-slate-200/60 transition-colors cursor-pointer"
             >
               Limpiar Chat
             </button>
           </div>
         </div>
 
-        {/* Área de Mensajes Despejada y de Ancho Completo */}
-        <div className="p-4 sm:p-6 space-y-4 flex-1 overflow-y-auto bg-slate-50/40 min-h-[380px] max-h-[600px]">
-          {mensajes.map((msg) => (
+        {/* Mensajes del chat */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {mensajes.map((m) => (
             <div
-              key={msg.id}
-              className={`flex gap-3 ${msg.rol === 'user' ? 'justify-end' : 'justify-start w-full'}`}
+              key={m.id}
+              className={`flex gap-3 ${m.rol === 'user' ? 'justify-end' : 'justify-start'}`}
             >
-              {/* Avatar IA */}
-              {msg.rol === 'assistant' && (
-                <div className="w-8 h-8 rounded-full bg-blue-900 text-white flex items-center justify-center shrink-0 shadow-xs mt-1">
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
-                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-                  </svg>
+              {m.rol === 'assistant' && (
+                <div className="h-7 w-7 rounded-full bg-blue-900 text-white flex items-center justify-center font-bold text-[10px] shrink-0 mt-0.5">
+                  FHL
                 </div>
               )}
 
-              {/* Burbuja de Mensaje — Expansiva para tablas y Markdown */}
               <div
-                className={`rounded-lg p-4 sm:p-5 shadow-2xs text-xs ${
-                  msg.rol === 'user'
-                    ? 'bg-blue-900 text-white font-medium rounded-tr-none max-w-xl self-end'
-                    : 'bg-white text-slate-800 border border-slate-200/90 rounded-tl-none w-full max-w-full'
+                className={`max-w-2xl rounded-xl p-3.5 text-xs ${
+                  m.rol === 'user'
+                    ? 'bg-blue-900 text-white font-medium rounded-tr-none'
+                    : 'bg-slate-50 border border-slate-200/80 text-slate-800 rounded-tl-none shadow-2xs'
                 }`}
               >
-                {msg.rol === 'assistant' ? (
-                  <MarkdownRenderer content={msg.texto} />
+                {m.rol === 'user' ? (
+                  <p className="whitespace-pre-wrap">{m.texto}</p>
                 ) : (
-                  <p className="whitespace-pre-line leading-relaxed">{msg.texto}</p>
+                  <MarkdownViewer content={m.texto} />
                 )}
-
                 <span
-                  className={`text-[9px] block text-right mt-2 font-mono ${
-                    msg.rol === 'user' ? 'text-blue-200' : 'text-slate-400'
+                  className={`text-[9px] block mt-1.5 ${
+                    m.rol === 'user' ? 'text-blue-200 text-right' : 'text-slate-400 text-left'
                   }`}
                 >
-                  {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  {m.timestamp.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}
                 </span>
               </div>
-
-              {/* Avatar Usuario */}
-              {msg.rol === 'user' && (
-                <div className="w-8 h-8 rounded-full bg-slate-800 text-white flex items-center justify-center shrink-0 shadow-xs mt-1 font-bold text-xs">
-                  AD
-                </div>
-              )}
             </div>
           ))}
 
-          {/* Spinner de escribiendo */}
           {enviandoMensaje && (
-            <div className="flex gap-3 justify-start items-center w-full">
-              <div className="w-8 h-8 rounded-full bg-blue-900 text-white flex items-center justify-center shrink-0 shadow-xs">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
-                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-                </svg>
+            <div className="flex gap-3 justify-start">
+              <div className="h-7 w-7 rounded-full bg-blue-900 text-white flex items-center justify-center font-bold text-[10px] shrink-0 mt-0.5">
+                FHL
               </div>
-              <div className="bg-white border border-slate-200 rounded-lg rounded-tl-none p-3.5 shadow-xs flex items-center gap-2">
-                <span className="w-2 h-2 bg-blue-900 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                <span className="w-2 h-2 bg-blue-900 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                <span className="w-2 h-2 bg-blue-900 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-                <span className="text-xs text-slate-500 font-semibold ml-2">Consultando catálogo en tiempo real...</span>
+              <div className="bg-slate-50 border border-slate-200/80 rounded-xl rounded-tl-none p-3 text-xs text-slate-500 flex items-center gap-2">
+                <div className="h-3 w-3 border-2 border-blue-900 border-t-transparent rounded-full animate-spin" />
+                <span>Consultando las bases de datos con GLM 5.2...</span>
               </div>
             </div>
           )}
@@ -527,176 +752,65 @@ DIRECTIVAS DE MÁXIMA PRECISIÓN Y EXACTITUD (Temperatura configurada: ${tempera
           <div ref={chatBottomRef} />
         </div>
 
-        {/* Sugerencias Rápidas — Envueltas limpiamente sin scrollbar feo */}
-        <div className="px-4 py-2.5 bg-white border-t border-slate-200/80 flex flex-wrap items-center gap-1.5">
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider shrink-0 mr-1">
+        {/* Sugerencias Rápidas */}
+        <div className="px-4 py-2 bg-slate-50 border-t border-slate-100 flex items-center gap-2 overflow-x-auto text-xs">
+          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider shrink-0">
             Sugerencias:
           </span>
-          {sugerenciasRapidas.map((sug, i) => (
+          {sugerenciasRapidas.map((s, idx) => (
             <button
-              key={i}
+              key={idx}
               type="button"
-              onClick={() => enviarMensajeChat(sug)}
+              onClick={() => enviarMensajeChat(s)}
               disabled={enviandoMensaje}
-              className="px-3 py-1 bg-slate-100 hover:bg-blue-50 hover:text-blue-900 text-slate-700 rounded-md text-[11px] font-medium transition-colors cursor-pointer disabled:opacity-50 border border-slate-200/60"
+              className="px-2.5 py-1 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold rounded-md transition-colors shadow-2xs whitespace-nowrap cursor-pointer text-[11px] disabled:opacity-50"
             >
-              {sug}
+              {s}
             </button>
           ))}
         </div>
 
-        {/* Barra de Entrada de Mensaje */}
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            enviarMensajeChat(inputMensaje);
-          }}
-          className="p-3 bg-slate-100 border-t border-slate-200/80 flex gap-2"
-        >
+        {/* Input para escribir */}
+        <div className="p-3 bg-white border-t border-slate-200/80 flex items-center gap-2">
           <input
             type="text"
             value={inputMensaje}
             onChange={(e) => setInputMensaje(e.target.value)}
-            placeholder="Escribí tu consulta sobre filtros, precios o vehículos (ej: Armame una tabla con los filtros de Fiat)..."
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                enviarMensajeChat(inputMensaje);
+              }
+            }}
+            placeholder="Preguntale al auditor sobre catálogo, deudas de clientes, pedidos o precios..."
             disabled={enviandoMensaje}
-            className="flex-1 px-4 py-3 bg-white border border-slate-300 rounded-md text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-900 font-medium disabled:opacity-50 shadow-2xs"
+            className="flex-1 px-3.5 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-900 focus:bg-white text-slate-900 placeholder:text-slate-400 font-medium"
           />
+
           <button
-            type="submit"
+            type="button"
+            onClick={() => enviarMensajeChat(inputMensaje)}
             disabled={enviandoMensaje || !inputMensaje.trim()}
-            className="px-6 py-3 bg-blue-900 hover:bg-blue-800 text-white font-bold text-xs rounded-md transition-colors shadow-xs disabled:opacity-50 cursor-pointer flex items-center gap-2 shrink-0"
+            className="px-4 py-2.5 bg-blue-900 hover:bg-blue-800 text-white font-bold text-xs rounded-lg transition-colors shadow-xs disabled:opacity-50 cursor-pointer flex items-center gap-1.5 shrink-0"
           >
-            {enviandoMensaje ? (
-              <>
-                <div className="h-3.5 w-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                <span>Enviando...</span>
-              </>
-            ) : (
-              <>
-                <span>Enviar</span>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
-                  <line x1="22" y1="2" x2="11" y2="13" />
-                  <polygon points="22 2 15 22 11 13 2 9 22 2" />
-                </svg>
-              </>
-            )}
+            <span>Enviar</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+              <line x1="22" y1="2" x2="11" y2="13" />
+              <polygon points="22 2 15 22 11 13 2 9 22 2" />
+            </svg>
           </button>
-        </form>
-
-      </div>
-
-      {/* Botón Plegable para Ver la Tabla de Filtros Observados */}
-      <div className="bg-white rounded-lg border border-slate-200/80 p-4 shadow-xs">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-4 bg-blue-900 rounded-full" aria-hidden="true" />
-            <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-              Detalle de Filtros Observados ({sinPrecio.length + precioAtipico.length + sinDimensiones.length})
-            </h3>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <Link
-              href="/admin/productos"
-              className="text-xs font-bold text-blue-900 hover:underline flex items-center gap-1"
-            >
-              <span>Ir a Catálogo de Productos</span>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
-                <polyline points="9 18 15 12 9 6" />
-              </svg>
-            </Link>
-
-            <button
-              onClick={() => setMostrarTablaDetalle(!mostrarTablaDetalle)}
-              className="text-xs text-slate-600 hover:text-slate-900 px-3 py-1 bg-slate-100 rounded-md font-bold transition-colors cursor-pointer"
-            >
-              {mostrarTablaDetalle ? 'Ocultar Detalle' : 'Desplegar Detalle'}
-            </button>
-          </div>
         </div>
-
-        {mostrarTablaDetalle && (
-          <div className="mt-4 border border-slate-200 rounded-md overflow-hidden animate-in fade-in-50 duration-150">
-            <table className="w-full text-xs text-left">
-              <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold">
-                <tr>
-                  <th className="p-3">Código FHL</th>
-                  <th className="p-3">Observación Detectada</th>
-                  <th className="p-3">Precio Base</th>
-                  <th className="p-3">Dimensiones</th>
-                  <th className="p-3">Estado Web</th>
-                  <th className="p-3 text-right">Acción</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {sinPrecio.concat(precioAtipico).concat(sinDimensiones).slice(0, 30).map((f, idx) => {
-                  const esSinPrecio = !f.precio || f.precio <= 0;
-                  const esPrecioAlto = Number(f.precio || 0) > 100000;
-                  const esSinDim = !f.dimensiones || f.dimensiones.trim() === '';
-
-                  return (
-                    <tr key={idx} className="hover:bg-slate-50 transition-colors">
-                      <td className="p-3 font-bold text-blue-900 font-mono">{f.codigo_fhl}</td>
-                      <td className="p-3">
-                        {esSinPrecio && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-100 text-red-800 rounded font-semibold text-[10px] mr-1">
-                            Precio $0
-                          </span>
-                        )}
-                        {esPrecioAlto && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-100 text-amber-800 rounded font-semibold text-[10px] mr-1">
-                            Precio &gt; $100k
-                          </span>
-                        )}
-                        {esSinDim && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-slate-100 text-slate-700 rounded font-semibold text-[10px]">
-                            Sin medidas
-                          </span>
-                        )}
-                      </td>
-                      <td className="p-3 font-mono font-bold text-slate-800">
-                        {f.precio ? `$${Number(f.precio).toLocaleString('es-AR')}` : '$0.00'}
-                      </td>
-                      <td className="p-3 text-slate-600">{f.dimensiones || '—'}</td>
-                      <td className="p-3 font-semibold">
-                        <span className={f.activo !== false ? 'text-green-700' : 'text-slate-400'}>
-                          {f.activo !== false ? 'Visible' : 'Oculto'}
-                        </span>
-                      </td>
-                      <td className="p-3 text-right">
-                        <Link
-                          href="/admin/productos"
-                          className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-[11px] font-bold transition-colors"
-                        >
-                          Editar
-                        </Link>
-                      </td>
-                    </tr>
-                  );
-                })}
-
-                {sinPrecio.length === 0 && precioAtipico.length === 0 && sinDimensiones.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="p-8 text-center text-slate-500 font-semibold text-xs">
-                      No se detectaron filtros con anomalías en la base de datos actual.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
       </div>
 
-      {/* Modal de Importador Excel */}
+      {/* Modal de importación */}
       {modalImportar && (
         <ImportadorExcel
           tipo={modalImportar}
+          onCerrar={() => setModalImportar(null)}
           onFinalizado={() => {
             setModalImportar(null);
             cargarYAuditar();
           }}
-          onCerrar={() => setModalImportar(null)}
         />
       )}
     </div>

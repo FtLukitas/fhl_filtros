@@ -14,18 +14,20 @@ export async function POST(req: NextRequest) {
     }
 
     const modelosChat = [
+      'z-ai/glm-5.2:free',
+      'nvidia/nemotron-3-super-120b-a12b:free',
       'nvidia/nemotron-3-nano-30b-a3b:free',
-      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
       'openrouter/free'
     ];
 
     let textoRespuesta = '';
 
-    for (const mod of modelosChat) {
+    // 1. Intentar hasta 10 veces con z-ai/glm-5.2:free
+    for (let intento = 1; intento <= 10; intento++) {
       try {
         const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
           method: 'POST',
-          signal: AbortSignal.timeout(9000),
+          signal: AbortSignal.timeout(14000),
           headers: {
             Authorization: `Bearer ${apiKey}`,
             'Content-Type': 'application/json',
@@ -33,7 +35,7 @@ export async function POST(req: NextRequest) {
             'X-Title': 'FHL Filtros Auditor IA Chat',
           },
           body: JSON.stringify({
-            model: mod,
+            model: 'z-ai/glm-5.2:free',
             messages: [
               {
                 role: 'system',
@@ -49,14 +51,72 @@ export async function POST(req: NextRequest) {
 
         if (res.ok) {
           const data = await res.json();
-          const content = data.choices?.[0]?.message?.content?.trim();
+          let content = data.choices?.[0]?.message?.content?.trim();
           if (content) {
+            content = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
             textoRespuesta = content;
             break;
           }
         }
+
+        if (res.status === 429 && intento < 10) {
+          await new Promise((r) => setTimeout(r, 600 + intento * 150));
+          continue;
+        }
       } catch (e) {
-        console.warn(`Fallback al siguiente modelo tras error en ${mod}:`, e);
+        if (intento < 10) {
+          await new Promise((r) => setTimeout(r, 600));
+          continue;
+        }
+      }
+    }
+
+    // 2. Si fallaron los 10 intentos de GLM 5.2, usar fallbacks:
+    if (!textoRespuesta) {
+      const fallbacks = [
+        'nvidia/nemotron-3-super-120b-a12b:free',
+        'nvidia/nemotron-3-nano-30b-a3b:free',
+        'openrouter/free'
+      ];
+
+      for (const mod of fallbacks) {
+        try {
+          const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+            method: 'POST',
+            signal: AbortSignal.timeout(12000),
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              'Content-Type': 'application/json',
+              'HTTP-Referer': 'https://fhlfiltros.com.ar',
+              'X-Title': 'FHL Filtros Auditor IA Chat Fallback',
+            },
+            body: JSON.stringify({
+              model: mod,
+              messages: [
+                {
+                  role: 'system',
+                  content: `${systemPrompt}\n\nBASE DE DATOS COMPLETA DE FHL FILTROS:\n${JSON.stringify(contextoCatalogo, null, 2)}`,
+                },
+                ...(Array.isArray(historial) ? historial : []),
+              ],
+              temperature: Math.max(0.0, Math.min(1.0, temperatura)),
+              top_p: 0.1,
+              max_tokens: 2500,
+            }),
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            let content = data.choices?.[0]?.message?.content?.trim();
+            if (content) {
+              content = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+              textoRespuesta = content;
+              break;
+            }
+          }
+        } catch (e) {
+          console.warn(`Fallback a ${mod} falló:`, e);
+        }
       }
     }
 

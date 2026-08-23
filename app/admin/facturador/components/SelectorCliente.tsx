@@ -40,7 +40,44 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmarEliminar, setConfirmarEliminar] = useState(false);
+  const [saldoNetoCliente, setSaldoNetoCliente] = useState<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Cargar saldo neto del cliente seleccionado
+  useEffect(() => {
+    if (!clienteSeleccionado) {
+      setSaldoNetoCliente(null);
+      return;
+    }
+
+    async function cargarSaldo() {
+      if (!clienteSeleccionado) return;
+      try {
+        const [resPed, resPag, resMov] = await Promise.all([
+          supabase.from('pedidos').select('id, total').eq('cliente_id', clienteSeleccionado.id).neq('estado', 'cancelado'),
+          supabase.from('pagos').select('pedido_id, monto').eq('cliente_id', clienteSeleccionado.id),
+          supabase.from('movimientos_saldo').select('monto').eq('cliente_id', clienteSeleccionado.id),
+        ]);
+
+        const pagosPorPedido = new Map<string, number>();
+        (resPag.data || []).forEach((p: any) => {
+          pagosPorPedido.set(p.pedido_id, (pagosPorPedido.get(p.pedido_id) || 0) + Number(p.monto || 0));
+        });
+
+        const deudaPed = (resPed.data || []).reduce((sum: number, p: any) => {
+          const pagado = pagosPorPedido.get(p.id) || 0;
+          return sum + Math.max(0, Number(p.total || 0) - pagado);
+        }, 0);
+
+        const balMov = (resMov.data || []).reduce((sum: number, m: any) => sum + Number(m.monto || 0), 0);
+        setSaldoNetoCliente(balMov - deudaPed);
+      } catch (e) {
+        console.error('Error al cargar saldo del cliente:', e);
+      }
+    }
+
+    cargarSaldo();
+  }, [clienteSeleccionado]);
 
   // Cargar clientes activos y listas de precios
   const cargarDatos = async () => {
@@ -300,6 +337,27 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
                   )}
                   {clienteSeleccionado.direccion && (
                     <p className="text-slate-600">{clienteSeleccionado.direccion}</p>
+                  )}
+
+                  {/* Badge de Saldo Neto */}
+                  {saldoNetoCliente !== null && (
+                    <div className="pt-1.5 flex items-center gap-1.5 flex-wrap">
+                      <span
+                        className={`text-[11px] font-mono font-bold px-2 py-0.5 rounded ${
+                          saldoNetoCliente < 0
+                            ? 'bg-red-100 text-red-700'
+                            : saldoNetoCliente > 0
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        {saldoNetoCliente < 0
+                          ? `⚠️ Saldo Deudor: -$${Math.abs(saldoNetoCliente).toLocaleString('es-AR', { minimumFractionDigits: 2 })}`
+                          : saldoNetoCliente > 0
+                          ? `✓ Saldo a Favor: +$${saldoNetoCliente.toLocaleString('es-AR', { minimumFractionDigits: 2 })}`
+                          : 'Cuenta al día ($0,00)'}
+                      </span>
+                    </div>
                   )}
                 </div>
 

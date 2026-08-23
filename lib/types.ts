@@ -92,6 +92,7 @@ export interface ResumenFinancieroCliente {
   totalPagado: number;
   totalDeuda: number;
   totalSaldoAFavor: number;
+  saldoNeto: number;
   pedidosPendientes: number;
   pedidosImpagos: number;
 }

@@ -182,7 +182,6 @@ export default function ImportadorExcel({ tipo, onFinalizado, onCerrar }: Import
         });
 
         setFilasFiltros(preview);
-        ejecutarAuditoriaIA(preview);
       } else {
         // Vehículos (Tabla B)
         const { data: dbVehiculos } = await supabase.from('Tabla B').select('*');
@@ -244,7 +243,6 @@ export default function ImportadorExcel({ tipo, onFinalizado, onCerrar }: Import
         });
 
         setFilasVehiculos(preview);
-        ejecutarAuditoriaIA(preview);
       }
     } catch (err: any) {
       console.error(err);
@@ -282,7 +280,7 @@ export default function ImportadorExcel({ tipo, onFinalizado, onCerrar }: Import
 
     try {
       if (tipo === 'filtros') {
-        const filasValidas = filasFiltros.filter((f) => f.tipoAccion === 'nuevo' || f.tipoAccion === 'actualizar');
+        const filasValidas = filasFiltros.filter((f) => f.tipoAccion !== 'error');
 
         let insertados = 0;
         let actualizados = 0;
@@ -311,13 +309,16 @@ export default function ImportadorExcel({ tipo, onFinalizado, onCerrar }: Import
           }
         }
 
-        setResultadoFinal(`Importación finalizada con éxito: ${insertados} filtros creados, ${actualizados} actualizados.`);
+        setResultadoFinal(`Importación finalizada con éxito: ${insertados} filtros nuevos y ${actualizados} actualizados/sincronizados.`);
       } else {
         // Vehículos
-        const filasValidas = filasVehiculos.filter((f) => f.tipoAccion === 'nuevo');
+        const filasValidas = filasVehiculos.filter((f) => f.tipoAccion !== 'error');
         let insertados = 0;
 
         for (const fila of filasValidas) {
+          // Si ya existe exactamente igual, evitar duplicarlo en base de datos
+          if (fila.tipoAccion === 'sin_cambios') continue;
+
           const payload = {
             marca: fila.marca,
             modelo: fila.modelo,
@@ -331,7 +332,7 @@ export default function ImportadorExcel({ tipo, onFinalizado, onCerrar }: Import
           if (!error) insertados++;
         }
 
-        setResultadoFinal(`Importación finalizada con éxito: ${insertados} vehículos registrados.`);
+        setResultadoFinal(`Importación finalizada con éxito: ${insertados > 0 ? `${insertados} vehículos registrados.` : 'Todos los vehículos ya estaban sincronizados.'}`);
       }
 
       onFinalizado();
@@ -359,7 +360,11 @@ export default function ImportadorExcel({ tipo, onFinalizado, onCerrar }: Import
     ? filasFiltros.filter((f) => f.tipoAccion === 'error').length
     : filasVehiculos.filter((f) => f.tipoAccion === 'error').length;
 
-  const tieneFilasParaImportar = totalNuevos > 0 || totalActualizar > 0;
+  const totalValidos = tipo === 'filtros'
+    ? filasFiltros.filter((f) => f.tipoAccion !== 'error').length
+    : filasVehiculos.filter((f) => f.tipoAccion !== 'error').length;
+
+  const tieneFilasParaImportar = totalValidos > 0;
 
   const alertasPorIndice = new Map<number, AlertaAuditoria>();
   if (auditoriaIA?.filasConAlerta) {
@@ -368,85 +373,89 @@ export default function ImportadorExcel({ tipo, onFinalizado, onCerrar }: Import
     });
   }
 
-  const descargarPlantilla = () => {
-    if (tipo === 'filtros') {
-      const dataEjemplo = [
-        {
-          codigo_fhl: 'FHL-001',
-          equivalencias: 'AKX-1014, CF-8890, CU-4442',
-          dimensiones: 'Largo: 215 mm, Ancho: 195 mm, Alto: 25 mm',
-          descripcion_aplicacion: 'CHEVROLET Onix 1.4 8v 2013 → 2019 / Prisma 1.4 2013 →',
-          precio: 4500,
-          activo: 'SI',
-        },
-        {
-          codigo_fhl: 'FHL-002',
-          equivalencias: 'AKX-3548, 1312766080, MH 206',
-          dimensiones: 'Largo: 435 mm, Ancho: 143 mm, Alto: 18 mm',
-          descripcion_aplicacion: 'FIAT Ducato 2.8 JTD 2004 → 2006 / PEUGEOT Boxer 2.8 Hdi 2004 →',
-          precio: 5200,
-          activo: 'SI',
-        },
-        {
-          codigo_fhl: 'FHL-003',
-          equivalencias: 'AKX-1440, MP 144, CF-9800',
-          dimensiones: 'Largo: 198 mm, Ancho: 216 mm, Alto: 30 mm',
-          descripcion_aplicacion: 'VOLKSWAGEN Gol Trend 1.6 2008 → / Fox 1.6 2004 → / Suran 1.6 2006 →',
-          precio: 3800,
-          activo: 'NO',
-        },
-      ];
+  const descargarPlantilla = async () => {
+    try {
+      if (tipo === 'filtros') {
+        const { data: filtros } = await supabase
+          .from('Tabla A')
+          .select('codigo_fhl, equivalencias, dimensiones, descripcion_aplicacion, precio, activo')
+          .eq('eliminado', false)
+          .order('codigo_fhl', { ascending: true });
 
-      const ws = XLSX.utils.json_to_sheet(dataEjemplo);
-      ws['!cols'] = [
-        { wch: 15 },
-        { wch: 35 },
-        { wch: 42 },
-        { wch: 60 },
-        { wch: 12 },
-        { wch: 10 },
-      ];
+        const rows = (filtros && filtros.length > 0)
+          ? filtros.map((f: any) => ({
+              codigo_fhl: f.codigo_fhl || '',
+              equivalencias: f.equivalencias || '',
+              dimensiones: f.dimensiones || '',
+              descripcion_aplicacion: f.descripcion_aplicacion || '',
+              precio: Number(f.precio || 0),
+              activo: f.activo !== false ? 'SI' : 'NO',
+            }))
+          : [
+              {
+                codigo_fhl: 'FHL-001',
+                equivalencias: 'AKX-1014, CF-8890, CU-4442',
+                dimensiones: 'Largo: 215 mm, Ancho: 195 mm, Alto: 25 mm',
+                descripcion_aplicacion: 'CHEVROLET Onix 1.4 8v 2013 → 2019 / Prisma 1.4 2013 →',
+                precio: 4500,
+                activo: 'SI',
+              },
+            ];
 
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'Filtros_FHL');
-      XLSX.writeFile(wb, 'plantilla_importacion_filtros_fhl.xlsx');
-    } else {
-      const dataEjemplo = [
-        {
-          marca: 'CHEVROLET',
-          modelo: 'ONIX',
-          version: '1.4 8v LT / LTZ',
-          año: '2013 → 2019',
-          filtro_asociado: 'FHL-001',
-        },
-        {
-          marca: 'FIAT',
-          modelo: 'DUCATO',
-          version: '2.8 JTD 127cv',
-          año: '2004 → 2006',
-          filtro_asociado: 'FHL-002',
-        },
-        {
-          marca: 'VOLKSWAGEN',
-          modelo: 'GOL TREND',
-          version: '1.6 8v MSI',
-          año: '2008 →',
-          filtro_asociado: 'FHL-003',
-        },
-      ];
+        const ws = XLSX.utils.json_to_sheet(rows);
+        ws['!cols'] = [
+          { wch: 15 },
+          { wch: 35 },
+          { wch: 42 },
+          { wch: 60 },
+          { wch: 12 },
+          { wch: 10 },
+        ];
 
-      const ws = XLSX.utils.json_to_sheet(dataEjemplo);
-      ws['!cols'] = [
-        { wch: 18 },
-        { wch: 18 },
-        { wch: 25 },
-        { wch: 18 },
-        { wch: 18 },
-      ];
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Filtros_FHL');
+        XLSX.writeFile(wb, 'catalogo_filtros_tabla_a.xlsx');
+      } else {
+        const { data: vehiculos } = await supabase
+          .from('Tabla B')
+          .select('marca, modelo, version, año, filtro_asociado')
+          .eq('eliminado', false)
+          .order('marca', { ascending: true })
+          .order('modelo', { ascending: true });
 
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'Vehiculos_FHL');
-      XLSX.writeFile(wb, 'plantilla_importacion_vehiculos_fhl.xlsx');
+        const rows = (vehiculos && vehiculos.length > 0)
+          ? vehiculos.map((v: any) => ({
+              marca: v.marca || '',
+              modelo: v.modelo || '',
+              version: v.version || '',
+              año: v.año || '',
+              filtro_asociado: v.filtro_asociado || '',
+            }))
+          : [
+              {
+                marca: 'CHEVROLET',
+                modelo: 'ONIX',
+                version: '1.4 8v LT / LTZ',
+                año: '2013 → 2019',
+                filtro_asociado: 'FHL-001',
+              },
+            ];
+
+        const ws = XLSX.utils.json_to_sheet(rows);
+        ws['!cols'] = [
+          { wch: 18 },
+          { wch: 18 },
+          { wch: 25 },
+          { wch: 18 },
+          { wch: 18 },
+        ];
+
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Vehiculos_FHL');
+        XLSX.writeFile(wb, 'catalogo_vehiculos_tabla_b.xlsx');
+      }
+    } catch (e) {
+      console.error('Error al descargar plantilla:', e);
     }
   };
 
@@ -658,23 +667,45 @@ export default function ImportadorExcel({ tipo, onFinalizado, onCerrar }: Import
               </div>
             )}
 
-            {/* Badges de resumen */}
-            <div className="flex items-center gap-3 mb-3 flex-wrap">
-              <span className="text-xs bg-green-50 text-green-700 border border-green-200 px-2.5 py-1 rounded-lg font-bold">
-                {totalNuevos} Nuevos
-              </span>
-              {tipo === 'filtros' && (
-                <span className="text-xs bg-amber-50 text-amber-700 border border-amber-200 px-2.5 py-1 rounded-lg font-bold">
-                  {totalActualizar} A Actualizar
+            {/* Badges de resumen y Botón Auditar con IA */}
+            <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs bg-green-50 text-green-700 border border-green-200 px-2.5 py-1 rounded-lg font-bold">
+                  {totalNuevos} Nuevos
                 </span>
-              )}
-              <span className="text-xs bg-slate-100 text-slate-600 border border-slate-200 px-2.5 py-1 rounded-lg font-bold">
-                {totalSinCambios} Sin Cambios
-              </span>
-              {totalErrores > 0 && (
-                <span className="text-xs bg-red-50 text-red-700 border border-red-200 px-2.5 py-1 rounded-lg font-bold">
-                  {totalErrores} Errores
+                {tipo === 'filtros' && (
+                  <span className="text-xs bg-amber-50 text-amber-700 border border-amber-200 px-2.5 py-1 rounded-lg font-bold">
+                    {totalActualizar} A Actualizar
+                  </span>
+                )}
+                <span className="text-xs bg-slate-100 text-slate-600 border border-slate-200 px-2.5 py-1 rounded-lg font-bold">
+                  {totalSinCambios} Sin Cambios
                 </span>
+                {totalErrores > 0 && (
+                  <span className="text-xs bg-red-50 text-red-700 border border-red-200 px-2.5 py-1 rounded-lg font-bold">
+                    {totalErrores} Errores
+                  </span>
+                )}
+              </div>
+
+              {!auditoriaIA && (
+                <button
+                  type="button"
+                  onClick={() => ejecutarAuditoriaIA(tipo === 'filtros' ? filasFiltros : filasVehiculos)}
+                  disabled={auditandoIA}
+                  className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 rounded-lg text-xs font-bold transition-all shadow-2xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  {auditandoIA ? (
+                    <>
+                      <div className="h-3.5 w-3.5 border-2 border-indigo-900 border-t-transparent rounded-full animate-spin" />
+                      <span>Auditando con GLM 5.2...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>✨ Auditar con IA (Opcional)</span>
+                    </>
+                  )}
+                </button>
               )}
             </div>
 
@@ -839,7 +870,7 @@ export default function ImportadorExcel({ tipo, onFinalizado, onCerrar }: Import
                     <span>Importando...</span>
                   </>
                 ) : (
-                  <span>Confirmar e Importar</span>
+                  <span>Confirmar e Importar ({totalValidos})</span>
                 )}
               </button>
             )}

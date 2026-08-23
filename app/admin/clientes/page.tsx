@@ -27,11 +27,13 @@ export default function ClientesAdminPage() {
     cliente: Cliente | null;
     deudaActual: number;
     saldoActual: number;
+    saldoNetoActual: number;
   }>({
     abierto: false,
     cliente: null,
     deudaActual: 0,
     saldoActual: 0,
+    saldoNetoActual: 0,
   });
   
   // Campos del formulario
@@ -126,15 +128,17 @@ export default function ClientesAdminPage() {
         }
 
         const balanceSaldo = saldoPorCliente.get(c.id) || 0;
-        const saldoAFavor = Math.max(0, balanceSaldo);
-        const deudaAjustes = Math.max(0, -balanceSaldo);
-        const totalDeuda = totalDeudaPedidos + deudaAjustes;
+        // Saldo neto unificado: balanceSaldo (+) menos deudas de pedidos (-)
+        const saldoNeto = balanceSaldo - totalDeudaPedidos;
+        const saldoAFavor = saldoNeto > 0 ? saldoNeto : 0;
+        const totalDeuda = saldoNeto < 0 ? Math.abs(saldoNeto) : 0;
 
         mapaResumen[c.id] = {
           totalComprado,
           totalPagado: totalComprado - totalDeudaPedidos,
           totalDeuda,
           totalSaldoAFavor: saldoAFavor,
+          saldoNeto,
           pedidosPendientes,
           pedidosImpagos: totalDeuda > 0 ? 1 : 0,
         };
@@ -282,10 +286,11 @@ export default function ClientesAdminPage() {
 
   // Filtrado de clientes
   const clientesFiltrados = clientes.filter((c) => {
-    const res = resumenes[c.id] || { totalDeuda: 0, totalSaldoAFavor: 0 };
-    if (filtroEstado === 'con_deuda' && res.totalDeuda <= 0) return false;
-    if (filtroEstado === 'con_saldo' && res.totalSaldoAFavor <= 0) return false;
-    if (filtroEstado === 'al_dia' && (res.totalDeuda > 0 || res.totalSaldoAFavor > 0)) return false;
+    const res = resumenes[c.id] || { totalDeuda: 0, totalSaldoAFavor: 0, saldoNeto: 0 };
+    const saldoNeto = res.saldoNeto !== undefined ? res.saldoNeto : (res.totalSaldoAFavor - res.totalDeuda);
+    if (filtroEstado === 'con_deuda' && saldoNeto >= 0) return false;
+    if (filtroEstado === 'con_saldo' && saldoNeto <= 0) return false;
+    if (filtroEstado === 'al_dia' && saldoNeto !== 0) return false;
 
     if (!busqueda) return true;
     const b = busqueda.toLowerCase().trim();
@@ -481,7 +486,15 @@ export default function ClientesAdminPage() {
                     {/* Botones de acción sin solapamiento */}
                     <div className="flex items-center gap-1 shrink-0">
                       <button
-                        onClick={() => setModalSaldo({ abierto: true, cliente: c, deudaActual: res.totalDeuda, saldoActual: res.totalSaldoAFavor })}
+                        onClick={() =>
+                          setModalSaldo({
+                            abierto: true,
+                            cliente: c,
+                            deudaActual: res.totalDeuda,
+                            saldoActual: res.totalSaldoAFavor,
+                            saldoNetoActual: res.saldoNeto,
+                          })
+                        }
                         className="text-slate-500 hover:text-emerald-700 p-1.5 rounded-md hover:bg-emerald-50 transition-colors"
                         title="Ajustar deuda o saldo del cliente"
                         aria-label={`Ajustar deuda o saldo de ${c.nombre}`}
@@ -578,42 +591,58 @@ export default function ClientesAdminPage() {
                     )}
                   </div>
 
-                  {/* Resumen Financiero */}
-                  <div className="grid grid-cols-2 gap-2 my-3 p-3 bg-slate-50 rounded-md text-xs border border-slate-100">
+                  {/* Saldo Neto Unificado */}
+                  <div
+                    className={`flex items-center justify-between p-3 rounded-md my-3 border ${
+                      res.saldoNeto < 0
+                        ? 'bg-red-50/80 border-red-200/80 text-red-950'
+                        : res.saldoNeto > 0
+                        ? 'bg-emerald-50/80 border-emerald-200/80 text-emerald-950'
+                        : 'bg-slate-50 border-slate-200/80 text-slate-700'
+                    }`}
+                  >
                     <div>
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                        Deuda Actual
+                      <span className="text-[10px] font-bold uppercase tracking-wider block opacity-75">
+                        {res.saldoNeto < 0 ? '⚠️ Saldo Deudor' : res.saldoNeto > 0 ? '✓ Saldo a Favor' : 'Cuenta al Día'}
                       </span>
                       <span
                         className={`font-black font-mono text-sm block ${
-                          tieneDeuda ? 'text-red-600' : 'text-slate-800'
+                          res.saldoNeto < 0
+                            ? 'text-red-600'
+                            : res.saldoNeto > 0
+                            ? 'text-emerald-700'
+                            : 'text-slate-700'
                         }`}
                       >
-                        ${res.totalDeuda.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+                        {res.saldoNeto < 0
+                          ? `-$${Math.abs(res.saldoNeto).toLocaleString('es-AR', { minimumFractionDigits: 2 })}`
+                          : res.saldoNeto > 0
+                          ? `+$${res.saldoNeto.toLocaleString('es-AR', { minimumFractionDigits: 2 })}`
+                          : '$0,00'}
                       </span>
                     </div>
 
-                    <div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                          Saldo a Favor
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => setModalSaldo({ abierto: true, cliente: c, deudaActual: res.totalDeuda, saldoActual: res.totalSaldoAFavor })}
-                          className="text-[10px] font-bold text-blue-900 hover:underline cursor-pointer"
-                        >
-                          Ajustar
-                        </button>
-                      </div>
-                      <span
-                        className={`font-black font-mono text-sm block ${
-                          tieneSaldo ? 'text-emerald-700' : 'text-slate-800'
-                        }`}
-                      >
-                        ${res.totalSaldoAFavor.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
-                      </span>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setModalSaldo({
+                          abierto: true,
+                          cliente: c,
+                          deudaActual: res.totalDeuda,
+                          saldoActual: res.totalSaldoAFavor,
+                          saldoNetoActual: res.saldoNeto,
+                        })
+                      }
+                      className={`text-xs font-bold px-2.5 py-1 rounded transition-colors cursor-pointer ${
+                        res.saldoNeto < 0
+                          ? 'bg-red-100 text-red-800 hover:bg-red-200'
+                          : res.saldoNeto > 0
+                          ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                          : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                      }`}
+                    >
+                      Ajustar Saldo
+                    </button>
                   </div>
                 </div>
 
@@ -909,10 +938,13 @@ export default function ClientesAdminPage() {
       {modalSaldo.cliente && (
         <ModalAjusteSaldo
           abierto={modalSaldo.abierto}
-          onCerrar={() => setModalSaldo({ abierto: false, cliente: null, deudaActual: 0, saldoActual: 0 })}
+          onCerrar={() =>
+            setModalSaldo({ abierto: false, cliente: null, deudaActual: 0, saldoActual: 0, saldoNetoActual: 0 })
+          }
           cliente={{ id: modalSaldo.cliente.id, nombre: modalSaldo.cliente.nombre }}
           deudaActual={modalSaldo.deudaActual}
           saldoActual={modalSaldo.saldoActual}
+          saldoNetoActual={modalSaldo.saldoNetoActual}
           onGuardado={async () => {
             await cargarDatos();
           }}

@@ -68,7 +68,7 @@ export default function ListasPreciosPage() {
     try {
       const [resListas, resFiltros, resItems, resClientes] = await Promise.all([
         supabase.from('listas_precios').select('*').order('created_at', { ascending: true }),
-        supabase.from('Tabla A').select('*').eq('eliminado', false).limit(50),
+        supabase.from('Tabla A').select('*').eq('eliminado', false).order('codigo_fhl', { ascending: true }),
         supabase.from('items_lista_precio').select('lista_id, codigo_fhl'),
         supabase.from('clientes').select('lista_precio_id').eq('eliminado', false),
       ]);

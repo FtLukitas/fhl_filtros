@@ -5,6 +5,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '../../../lib/supabase';
 import { generarPDF, obtenerPDFBlobUrl } from '../../../lib/generarPDF';
+import { formatearCodigo } from '../../../lib/codigos';
 import type {
   Cliente,
   PrecioCliente,
@@ -101,12 +102,17 @@ function FacturadorContenido() {
     if (!cliente || items.length === 0) return;
     setCargandoPreview(true);
     try {
+      const codigoFormateado = numeroPresupuesto
+        ? formatearCodigo(numeroPresupuesto)
+        : undefined;
+
       const url = await obtenerPDFBlobUrl({
         cliente,
         items,
         observaciones,
-        numeroPresupuesto,
+        numeroPresupuesto: codigoFormateado,
         validezDias,
+        pedidoId: modoEdicion ? pedidoIdAEditar : null,
       });
       setPreviewUrl((prev) => {
         if (prev) URL.revokeObjectURL(prev);
@@ -322,7 +328,7 @@ function FacturadorContenido() {
               cargarPrecios(pedData.cliente.id);
             }
             setObservaciones(pedData.observaciones || '');
-            setNumeroPresupuesto(`PED-${pedData.id.slice(0, 8).toUpperCase()}`);
+            setNumeroPresupuesto(formatearCodigo(pedData.numero_secuencial, pedData.created_at));
 
             if (pedData.items && pedData.items.length > 0) {
               setItems(
@@ -599,8 +605,9 @@ function FacturadorContenido() {
             cliente,
             items,
             observaciones,
-            numeroPresupuesto: `PED-${pedidoIdAEditar.slice(0, 8).toUpperCase()}`,
+            numeroPresupuesto: numeroPresupuesto || formatearCodigo(pedidoIdAEditar),
             validezDias,
+            pedidoId: pedidoIdAEditar,
           });
         }
 
@@ -640,8 +647,10 @@ function FacturadorContenido() {
             cliente,
             items,
             observaciones,
-            numeroPresupuesto: `PED-${nuevoPedido.id.slice(0, 8).toUpperCase()}`,
+            numeroPresupuesto: formatearCodigo(nuevoPedido.numero_secuencial, nuevoPedido.created_at),
             validezDias,
+            pedidoId: nuevoPedido.id,
+            fechaCreacion: nuevoPedido.created_at,
           });
         }
 
@@ -744,7 +753,7 @@ function FacturadorContenido() {
           </div>
 
           <h2 className="text-2xl font-black text-slate-800 tracking-tight">
-            {modoEdicion ? `Editar Pedido #${pedidoIdAEditar?.slice(0, 8)}` : 'Cargar Nuevo Pedido'}
+            {modoEdicion ? `Editar Pedido #${numeroPresupuesto || formatearCodigo(pedidoIdAEditar)}` : 'Cargar Nuevo Pedido'}
           </h2>
           <p className="text-xs text-slate-500 mt-1">
             {modoEdicion
@@ -856,7 +865,7 @@ function FacturadorContenido() {
                     type="text"
                     value={numeroPresupuesto}
                     onChange={(e) => setNumeroPresupuesto(e.target.value)}
-                    placeholder="Ej: 0001-000023"
+                    placeholder="Ej: 2026-0019 (Secuencial automático)"
                     className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600"
                   />
                 </div>

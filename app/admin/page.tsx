@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { generarPDF } from '@/lib/generarPDF';
+import { formatearCodigo } from '@/lib/codigos';
 import type { Pedido, Cliente, Presupuesto } from '@/lib/types';
 
 export default function AdminDashboardPage() {
@@ -167,8 +168,10 @@ export default function AdminDashboardPage() {
         cliente: p.cliente,
         items: itemsFactura,
         observaciones: p.observaciones || '',
-        numeroPresupuesto: p.numero || undefined,
+        numeroPresupuesto: formatearCodigo(p.numero_secuencial || p.numero, p.created_at),
         validezDias: p.validez_dias,
+        fechaCreacion: p.created_at,
+        pedidoId: p.pedido_id || p.id,
       });
     } catch (err) {
       console.error(err);
@@ -480,7 +483,7 @@ export default function AdminDashboardPage() {
                     <tr key={p.id} className="hover:bg-slate-50/60 transition-colors">
                       <td className="p-3">
                         <span className="font-bold text-slate-900 block font-mono">
-                          #{p.id.slice(0, 8)}
+                          #{formatearCodigo(p.numero_secuencial, p.created_at)}
                         </span>
                         <span className="text-[11px] text-slate-400">
                           {new Date(p.created_at).toLocaleDateString('es-AR')}

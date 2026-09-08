@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { generarPDF } from '@/lib/generarPDF';
+import { formatearCodigo } from '@/lib/codigos';
 import type { Cliente, Pedido, Pago, Presupuesto, MovimientoSaldo, PrecioCliente, ListaPrecio } from '@/lib/types';
 import ModalAjusteSaldo from '../components/ModalAjusteSaldo';
 
@@ -186,7 +187,7 @@ export default function ClienteDetallePage({ params }: PageProps) {
           id: `ped-${p.id}`,
           fecha: p.created_at,
           tipo: 'pedido',
-          titulo: `Pedido #${p.id.slice(0, 8)}`,
+          titulo: `Pedido #${formatearCodigo(p.numero_secuencial, p.created_at)}`,
           subtitulo: `Estado: ${p.estado.toUpperCase()} • ${p.items?.length || 0} ítems`,
           debito: t,
           credito: 0,
@@ -197,12 +198,14 @@ export default function ClienteDetallePage({ params }: PageProps) {
 
     pagos.forEach((p) => {
       const m = Number(p.monto || 0);
+      const pedAsociado = p.pedido_id ? pedidos.find((x) => x.id === p.pedido_id) : null;
+      const refTexto = pedAsociado ? `Imputado a pedido #${formatearCodigo(pedAsociado.numero_secuencial, pedAsociado.created_at)}` : 'Cobranza directa a cuenta';
       lista.push({
         id: `pago-${p.id}`,
         fecha: p.fecha || p.id,
         tipo: 'pago',
         titulo: `Pago / Cobranza (${p.metodo.toUpperCase()})`,
-        subtitulo: p.nota || (p.pedido_id ? `Imputado a pedido #${p.pedido_id.slice(0, 8)}` : 'Cobranza directa a cuenta'),
+        subtitulo: p.nota || refTexto,
         debito: 0,
         credito: m,
         montoNeto: m,
@@ -404,14 +407,16 @@ export default function ClienteDetallePage({ params }: PageProps) {
       cliente,
       items: itemsFormateados,
       observaciones: pr.observaciones || '',
-      numeroPresupuesto: pr.numero || '',
+      numeroPresupuesto: formatearCodigo(pr.numero_secuencial, pr.created_at),
       validezDias: pr.validez_dias || 30,
+      fechaCreacion: pr.created_at,
+      pedidoId: pr.pedido_id || pr.id,
     });
   };
 
   // Convertir presupuesto a pedido
   const handleConvertirPresupuesto = async (pr: Presupuesto) => {
-    if (!confirm(`¿Convertir presupuesto #${pr.numero || pr.id.slice(0, 8)} en un pedido formal?`)) return;
+    if (!confirm(`¿Convertir presupuesto #${formatearCodigo(pr.numero_secuencial, pr.created_at)} en un pedido formal?`)) return;
 
     try {
       // 1. Crear Pedido
@@ -964,7 +969,7 @@ export default function ClienteDetallePage({ params }: PageProps) {
                           <tr key={p.id} className="hover:bg-slate-50/60 transition-colors">
                             <td className="p-3">
                               <span className="font-bold text-slate-900 font-mono block">
-                                #{p.id.slice(0, 8)}
+                                #{formatearCodigo(p.numero_secuencial, p.created_at)}
                               </span>
                               <span className="text-[11px] text-slate-400">
                                 {new Date(p.created_at).toLocaleDateString('es-AR')}
@@ -1053,7 +1058,7 @@ export default function ClienteDetallePage({ params }: PageProps) {
                               href={`/admin/pedidos/${p.pedido_id}`}
                               className="font-bold text-blue-900 font-mono hover:underline"
                             >
-                              #{p.pedido_id.slice(0, 8)}
+                              #{formatearCodigo(pedidos.find((x) => x.id === p.pedido_id)?.numero_secuencial || p.pedido_id)}
                             </Link>
                           </td>
                           <td className="p-3">
@@ -1193,7 +1198,7 @@ export default function ClienteDetallePage({ params }: PageProps) {
                                   href={`/admin/pedidos/${m.pedido_id || m.referencia_pedido_id}`}
                                   className="font-bold text-blue-900 font-mono hover:underline"
                                 >
-                                  #{(m.pedido_id || m.referencia_pedido_id)?.slice(0, 8)}
+                                  #{formatearCodigo(pedidos.find((x) => x.id === (m.pedido_id || m.referencia_pedido_id))?.numero_secuencial || m.pedido_id || m.referencia_pedido_id)}
                                 </Link>
                               ) : (
                                 '—'

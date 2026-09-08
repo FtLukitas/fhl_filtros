@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
+import { formatearCodigo } from '@/lib/codigos';
 import type { Pedido, EstadoPedido } from '@/lib/types';
 
 export default function PedidosAdminPage() {
@@ -47,7 +48,7 @@ export default function PedidosAdminPage() {
 
   // Acciones de papelera y borrado
   const handleSoftDelete = async (p: Pedido) => {
-    if (!confirm(`¿Mover a papelera el Pedido #${p.id.slice(0, 8)}?`)) return;
+    if (!confirm(`¿Mover a papelera el Pedido #${formatearCodigo(p.numero_secuencial, p.created_at)}?`)) return;
     const { error } = await supabase.from('pedidos').update({ eliminado: true }).eq('id', p.id);
     if (!error) cargarPedidos();
   };
@@ -58,7 +59,7 @@ export default function PedidosAdminPage() {
   };
 
   const handleEliminarPermanente = async (p: Pedido) => {
-    if (!confirm(`ATENCIÓN: ¿Eliminar PERMANENTEMENTE el Pedido #${p.id.slice(0, 8)} de la base de datos?\n\nEsta acción NO se puede deshacer. Se borrarán definitivamente el pedido, sus ítems y los registros de pagos asociados.`)) return;
+    if (!confirm(`ATENCIÓN: ¿Eliminar PERMANENTEMENTE el Pedido #${formatearCodigo(p.numero_secuencial, p.created_at)} de la base de datos?\n\nEsta acción NO se puede deshacer. Se borrarán definitivamente el pedido, sus ítems y los registros de pagos asociados.`)) return;
 
     try {
       setCargando(true);
@@ -377,7 +378,7 @@ export default function PedidosAdminPage() {
                           href={`/admin/pedidos/${p.id}`}
                           className="font-bold text-blue-900 font-mono text-sm hover:underline block"
                         >
-                          #{p.id.slice(0, 8)}
+                          #{formatearCodigo(p.numero_secuencial, p.created_at)}
                         </Link>
                         <span className="text-[10px] text-slate-400">
                           {new Date(p.created_at).toLocaleDateString('es-AR')}
@@ -460,7 +461,7 @@ export default function PedidosAdminPage() {
                               href={`/admin/facturador?pedidoId=${p.id}`}
                               className="p-1.5 text-slate-500 hover:text-amber-600 rounded-md hover:bg-amber-50 transition-colors cursor-pointer"
                               title="Editar pedido"
-                              aria-label={`Editar pedido #${p.id.slice(0, 8)}`}
+                              aria-label={`Editar pedido #${formatearCodigo(p.numero_secuencial, p.created_at)}`}
                             >
                               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                 <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
@@ -477,7 +478,7 @@ export default function PedidosAdminPage() {
                               onClick={() => handleSoftDelete(p)}
                               className="text-slate-400 hover:text-red-600 p-1.5 rounded-md hover:bg-red-50 transition-colors cursor-pointer"
                               title="Mover a papelera"
-                              aria-label={`Mover a papelera pedido #${p.id.slice(0, 8)}`}
+                              aria-label={`Mover a papelera pedido #${formatearCodigo(p.numero_secuencial, p.created_at)}`}
                             >
                               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                                 <polyline points="3 6 5 6 21 6" />
@@ -491,7 +492,7 @@ export default function PedidosAdminPage() {
                               onClick={() => handleRestaurar(p)}
                               className="text-xs bg-green-600 hover:bg-green-700 text-white font-bold px-2.5 py-1 rounded-md transition-colors cursor-pointer"
                               title="Restaurar pedido"
-                              aria-label={`Restaurar pedido #${p.id.slice(0, 8)}`}
+                              aria-label={`Restaurar pedido #${formatearCodigo(p.numero_secuencial, p.created_at)}`}
                             >
                               Restaurar
                             </button>
@@ -499,7 +500,7 @@ export default function PedidosAdminPage() {
                               onClick={() => handleEliminarPermanente(p)}
                               className="text-xs bg-red-600 hover:bg-red-700 text-white font-bold px-2.5 py-1 rounded-md transition-colors cursor-pointer"
                               title="Eliminar de forma permanente de la base de datos"
-                              aria-label={`Eliminar permanentemente pedido #${p.id.slice(0, 8)}`}
+                              aria-label={`Eliminar permanentemente pedido #${formatearCodigo(p.numero_secuencial, p.created_at)}`}
                             >
                               Eliminar Definitivo
                             </button>

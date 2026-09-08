@@ -108,6 +108,7 @@ export type TipoMovimientoSaldo = 'excedente' | 'aplicado' | 'ajuste_manual' | '
 export interface Presupuesto {
   id: string;
   numero: string | null;
+  numero_secuencial?: number;
   cliente_id: string;
   fecha: string;
   validez_dias: number;
@@ -130,6 +131,7 @@ export interface ItemPresupuesto {
 
 export interface Pedido {
   id: string;
+  numero_secuencial?: number;
   cliente_id: string;
   presupuesto_id: string | null;
   estado: EstadoPedido;

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { generarPDF } from '@/lib/generarPDF';
+import { formatearCodigo } from '@/lib/codigos';
 import type { Pedido, Pago, MetodoPago, EstadoPedido, EstadoPagoPedido } from '@/lib/types';
 
 interface PageProps {
@@ -115,8 +116,10 @@ export default function PedidoDetallePage({ params }: PageProps) {
         cliente: pedido.cliente,
         items: itemsFactura,
         observaciones: pedido.observaciones || '',
-        numeroPresupuesto: `PED-${pedido.id.slice(0, 8).toUpperCase()}`,
+        numeroPresupuesto: formatearCodigo(pedido.numero_secuencial, pedido.created_at),
         validezDias: 30,
+        fechaCreacion: pedido.created_at,
+        pedidoId: pedido.id,
       });
       notificarOk('Comprobante PDF generado');
     } catch (err) {
@@ -129,7 +132,7 @@ export default function PedidoDetallePage({ params }: PageProps) {
   // Acciones de Papelera y Borrado Definitivo
   const handleSoftDelete = async () => {
     if (!pedido) return;
-    if (!confirm(`¿Mover a papelera el Pedido #${pedido.id.slice(0, 8)}?`)) return;
+    if (!confirm(`¿Mover a papelera el Pedido #${formatearCodigo(pedido.numero_secuencial, pedido.created_at)}?`)) return;
     const { error } = await supabase.from('pedidos').update({ eliminado: true }).eq('id', pedido.id);
     if (!error) {
       notificarOk('Pedido movido a la papelera');
@@ -148,7 +151,7 @@ export default function PedidoDetallePage({ params }: PageProps) {
 
   const handleEliminarPermanente = async () => {
     if (!pedido) return;
-    if (!confirm(`ATENCIÓN: ¿Eliminar PERMANENTEMENTE el Pedido #${pedido.id.slice(0, 8)} de la base de datos?\n\nEsta acción NO se puede deshacer. Se borrarán definitivamente el pedido, sus ítems y los pagos asociados.`)) return;
+    if (!confirm(`ATENCIÓN: ¿Eliminar PERMANENTEMENTE el Pedido #${formatearCodigo(pedido.numero_secuencial, pedido.created_at)} de la base de datos?\n\nEsta acción NO se puede deshacer. Se borrarán definitivamente el pedido, sus ítems y los pagos asociados.`)) return;
 
     try {
       setCargando(true);
@@ -221,7 +224,7 @@ export default function PedidoDetallePage({ params }: PageProps) {
           monto: -montoNum,
           tipo: 'aplicado',
           referencia_pedido_id: pedido.id,
-          nota: `Aplicado al pedido #${pedido.id.slice(0, 8)}`,
+          nota: `Aplicado al pedido #${formatearCodigo(pedido.numero_secuencial, pedido.created_at)}`,
           fecha: new Date().toISOString(),
         });
       }
@@ -233,7 +236,7 @@ export default function PedidoDetallePage({ params }: PageProps) {
           monto: excedente,
           tipo: 'excedente',
           referencia_pedido_id: pedido.id,
-          nota: `Excedente de pago en pedido #${pedido.id.slice(0, 8)}`,
+          nota: `Excedente de pago en pedido #${formatearCodigo(pedido.numero_secuencial, pedido.created_at)}`,
           fecha: new Date().toISOString(),
         });
       }
@@ -277,7 +280,7 @@ export default function PedidoDetallePage({ params }: PageProps) {
         monto: -montoAAplicar,
         tipo: 'aplicado',
         referencia_pedido_id: pedido.id,
-        nota: `Aplicado al pedido #${pedido.id.slice(0, 8)}`,
+        nota: `Aplicado al pedido #${formatearCodigo(pedido.numero_secuencial, pedido.created_at)}`,
         fecha: new Date().toISOString(),
       });
 
@@ -388,7 +391,7 @@ export default function PedidoDetallePage({ params }: PageProps) {
           <div>
             <div className="flex items-center gap-2.5 flex-wrap">
               <h2 className="text-2xl font-black text-slate-900 tracking-tight font-mono">
-                Pedido #{pedido.id.slice(0, 8)}
+                Pedido #{formatearCodigo(pedido.numero_secuencial, pedido.created_at)}
               </h2>
 
               {/* Badge Estado Logístico */}

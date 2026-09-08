@@ -9,7 +9,13 @@ export interface DatosPresupuesto {
   observaciones: string;
   numeroPresupuesto?: string;
   validezDias?: number;
-  deudaCliente?: number;
+  fechaCreacion?: string | Date | null;
+  pedidoId?: string | null;
+  saldoPrevio?: number; // Saldo neto previo explícito (positivo = a favor, negativo = deuda)
+  deudaCliente?: number; // compatibilidad
+  saldoCliente?: number; // compatibilidad
+  etiquetaSaldo?: string; // compatibilidad
+  tipoDocumento?: 'presupuesto' | 'pedido';
 }
 
 // Convertir imagen a base64 para embeder en el PDF
@@ -24,25 +30,51 @@ async function cargarImagenBase64(url: string): Promise<string> {
   });
 }
 
-// Calcular deuda neta del cliente en tiempo real
-export async function calcularDeudaCliente(clienteId: string): Promise<number> {
-  if (!clienteId) return 0;
+export interface EstadoCuentaCliente {
+  saldoNeto: number;
+  tipo: 'deuda' | 'saldo_a_favor' | 'al_dia';
+  etiqueta: string;
+  monto: number;
+}
+
+// Obtener estado de cuenta unificado anterior al comprobante (deuda o saldo a favor)
+export async function obtenerEstadoCuentaCliente(
+  clienteId: string,
+  fechaReferencia?: string | Date | null,
+  pedidoExcluidoId?: string | null
+): Promise<EstadoCuentaCliente> {
+  if (!clienteId) {
+    return { saldoNeto: 0, tipo: 'al_dia', etiqueta: 'AL DÍA', monto: 0 };
+  }
   try {
-    const [resPed, resPag, resMov] = await Promise.all([
-      supabase
-        .from('pedidos')
-        .select('id, total, eliminado')
-        .eq('cliente_id', clienteId)
-        .neq('estado', 'cancelado'),
-      supabase
-        .from('pagos')
-        .select('pedido_id, monto')
-        .eq('cliente_id', clienteId),
-      supabase
-        .from('movimientos_saldo')
-        .select('monto')
-        .eq('cliente_id', clienteId),
-    ]);
+    let queryPed = supabase
+      .from('pedidos')
+      .select('id, total, eliminado, created_at')
+      .eq('cliente_id', clienteId)
+      .neq('estado', 'cancelado');
+
+    let queryPag = supabase
+      .from('pagos')
+      .select('pedido_id, monto, fecha')
+      .eq('cliente_id', clienteId);
+
+    let queryMov = supabase
+      .from('movimientos_saldo')
+      .select('monto, fecha')
+      .eq('cliente_id', clienteId);
+
+    if (fechaReferencia) {
+      const fechaIso = typeof fechaReferencia === 'string' ? fechaReferencia : fechaReferencia.toISOString();
+      queryPed = queryPed.lt('created_at', fechaIso);
+      queryPag = queryPag.lte('fecha', fechaIso);
+      queryMov = queryMov.lte('fecha', fechaIso);
+    }
+
+    if (pedidoExcluidoId) {
+      queryPed = queryPed.neq('id', pedidoExcluidoId);
+    }
+
+    const [resPed, resPag, resMov] = await Promise.all([queryPed, queryPag, queryMov]);
 
     const pagosPorPedido = new Map<string, number>();
     (resPag.data || []).forEach((p: any) => {
@@ -56,12 +88,41 @@ export async function calcularDeudaCliente(clienteId: string): Promise<number> {
     }, 0);
 
     const balMov = (resMov.data || []).reduce((sum: number, m: any) => sum + Number(m.monto || 0), 0);
+    // Saldo neto unificado previo: créditos acumulados menos deuda de pedidos pendientes
     const saldoNeto = balMov - deudaPed;
-    return saldoNeto < 0 ? Math.abs(saldoNeto) : 0;
+
+    if (saldoNeto < 0) {
+      return {
+        saldoNeto,
+        tipo: 'deuda',
+        etiqueta: 'DEUDA',
+        monto: Math.abs(saldoNeto),
+      };
+    } else if (saldoNeto > 0) {
+      return {
+        saldoNeto,
+        tipo: 'saldo_a_favor',
+        etiqueta: 'SALDO A FAVOR',
+        monto: saldoNeto,
+      };
+    } else {
+      return {
+        saldoNeto: 0,
+        tipo: 'al_dia',
+        etiqueta: 'AL DÍA',
+        monto: 0,
+      };
+    }
   } catch (err) {
-    console.error('Error al calcular deuda del cliente para PDF:', err);
-    return 0;
+    console.error('Error al calcular saldo previo del cliente para PDF:', err);
+    return { saldoNeto: 0, tipo: 'al_dia', etiqueta: 'AL DÍA', monto: 0 };
   }
+}
+
+// Calcular deuda neta del cliente en tiempo real (mantenido por compatibilidad)
+export async function calcularDeudaCliente(clienteId: string): Promise<number> {
+  const estado = await obtenerEstadoCuentaCliente(clienteId);
+  return estado.tipo === 'deuda' ? estado.monto : 0;
 }
 
 // Paleta sobria para impresión (ahorro de tinta - todo blanco con trazos nítidos)
@@ -75,13 +136,20 @@ const BORDE_TABLA: RGB = [70, 70, 70]; // Gris oscuro para líneas de corte y ta
 async function generarInstanciaPDF(datos: DatosPresupuesto): Promise<jsPDF> {
   const { cliente, items, observaciones, numeroPresupuesto, validezDias = 30 } = datos;
 
-  // Obtener deuda actual del cliente si no fue provista
-  let deudaCliente = datos.deudaCliente;
-  if (deudaCliente === undefined && cliente?.id) {
-    deudaCliente = await calcularDeudaCliente(cliente.id);
-  }
-  if (deudaCliente === undefined) {
-    deudaCliente = 0;
+  // 1. Total del Pedido Actual
+  const totalGeneral = items.reduce((sum, item) => sum + item.cantidad * item.precioUnitario, 0);
+
+  // 2. Obtener Saldo Anterior / Previo del Cliente
+  let saldoNetoPrevio = 0;
+  if (datos.saldoPrevio !== undefined) {
+    saldoNetoPrevio = datos.saldoPrevio;
+  } else if (datos.saldoCliente !== undefined) {
+    saldoNetoPrevio = datos.saldoCliente;
+  } else if (datos.deudaCliente !== undefined) {
+    saldoNetoPrevio = -Math.abs(datos.deudaCliente);
+  } else if (cliente?.id) {
+    const estado = await obtenerEstadoCuentaCliente(cliente.id, datos.fechaCreacion, datos.pedidoId);
+    saldoNetoPrevio = estado.saldoNeto;
   }
 
   const doc = new jsPDF('p', 'mm', 'a4');
@@ -177,7 +245,6 @@ async function generarInstanciaPDF(datos: DatosPresupuesto): Promise<jsPDF> {
     doc.setFontSize(8.5);
     doc.setFont('helvetica', 'bold');
     doc.text(`Fecha del presupuesto: ${fecha}`, M + 4, yBox2 + 5.5);
-
     doc.text(`Validez: ${validezDias} días`, M + UTIL - 4, yBox2 + 5.5, { align: 'right' });
 
     // ===== RECUADRO 3: TABLA DE ITEMS =====
@@ -261,25 +328,164 @@ async function generarInstanciaPDF(datos: DatosPresupuesto): Promise<jsPDF> {
     }
   }
 
-  // ===== RECUADRO 4: DEUDA, TOTAL Y OBSERVACIONES (ÚLTIMA PÁGINA) =====
-  const totalGeneral = items.reduce((sum, item) => sum + item.cantidad * item.precioUnitario, 0);
+  // ===== RECUADRO 4: OBSERVACIONES, TOTAL PEDIDO, SALDO PREVIO Y TOTAL A PAGAR (ÚLTIMA PÁGINA) =====
+  const yBox4 = 246;
+  const hBox4 = 23;
 
-  const yBox4 = 248;
-  const hBox4 = 21;
+  const tieneBalancePrevio = Math.abs(saldoNetoPrevio) >= 0.01;
 
-  // Contorno exterior
-  doc.setDrawColor(...BORDE_TABLA);
-  doc.setLineWidth(0.4);
-  doc.rect(M, yBox4, UTIL, hBox4);
+  if (tieneBalancePrevio) {
+    // --- MODO CON ESTADO DE CUENTA PREVIO (4 COLUMNAS) ---
+    // Fondo sutil para la columna final de Total a Cancelar / Pagar
+    doc.setFillColor(248, 250, 252);
+    doc.rect(154, yBox4, 41, hBox4, 'F');
 
-  // Separadores verticales: Observaciones (15-98) | Deuda Cliente (98-145) | Total (145-195)
-  doc.setDrawColor(...GRIS_LINEA);
-  doc.setLineWidth(0.3);
-  doc.line(98, yBox4, 98, yBox4 + hBox4);
-  doc.line(145, yBox4, 145, yBox4 + hBox4);
+    // Contorno exterior
+    doc.setDrawColor(...BORDE_TABLA);
+    doc.setLineWidth(0.4);
+    doc.rect(M, yBox4, UTIL, hBox4, 'S');
 
-  // 1. Observaciones en el lado izquierdo
-  if (observaciones.trim()) {
+    // Separadores verticales:
+    // Col 1: Observaciones (15 - 74, ancho 59mm)
+    // Col 2: Total Pedido (74 - 114, ancho 40mm)
+    // Col 3: Saldo Previo (114 - 154, ancho 40mm)
+    // Col 4: Total a Cancelar / Pagar (154 - 195, ancho 41mm)
+    doc.setDrawColor(...GRIS_LINEA);
+    doc.setLineWidth(0.3);
+    doc.line(74, yBox4, 74, yBox4 + hBox4);
+    doc.line(114, yBox4, 114, yBox4 + hBox4);
+    doc.line(154, yBox4, 154, yBox4 + hBox4);
+
+    // 1. Observaciones en el lado izquierdo
+    doc.setTextColor(...GRIS_MEDIO);
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'bold');
+    doc.text('OBSERVACIONES:', M + 4, yBox4 + 5.5);
+
+    doc.setTextColor(...GRIS_OSCURO);
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'normal');
+    const textoObs = observaciones.trim() || 'Sin observaciones adicionales.';
+    const lineasObs = doc.splitTextToSize(textoObs, 52);
+    doc.text(lineasObs.slice(0, 2), M + 4, yBox4 + 10.5);
+
+    // 2. Columna 2: Total del Pedido Actual
+    doc.setTextColor(...GRIS_MEDIO);
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'bold');
+    doc.text('TOTAL PEDIDO', 78, yBox4 + 6);
+
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(...NEGRO);
+    doc.text(
+      `$${totalGeneral.toLocaleString('es-AR', { minimumFractionDigits: 2 })}`,
+      110,
+      yBox4 + 14,
+      { align: 'right' }
+    );
+
+    doc.setFontSize(6.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(...GRIS_MEDIO);
+    doc.text(
+      `${items.length} ${items.length === 1 ? 'ítem' : 'ítems'}`,
+      110,
+      yBox4 + 19,
+      { align: 'right' }
+    );
+
+    // 3. Columna 3: Saldo Anterior / Previo
+    doc.setTextColor(...GRIS_MEDIO);
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'bold');
+    doc.text('SALDO PREVIO', 118, yBox4 + 6);
+
+    doc.setFontSize(10.5);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(...NEGRO);
+
+    let textoSaldoPrevio = '$0,00';
+    let subtextoSaldoPrevio = 'Cuenta al día';
+    if (saldoNetoPrevio < 0) {
+      textoSaldoPrevio = `-$${Math.abs(saldoNetoPrevio).toLocaleString('es-AR', { minimumFractionDigits: 2 })}`;
+      subtextoSaldoPrevio = 'Deuda anterior';
+    } else if (saldoNetoPrevio > 0) {
+      textoSaldoPrevio = `+$${saldoNetoPrevio.toLocaleString('es-AR', { minimumFractionDigits: 2 })}`;
+      subtextoSaldoPrevio = 'Saldo a favor previo';
+    }
+
+    doc.text(textoSaldoPrevio, 150, yBox4 + 14, { align: 'right' });
+
+    doc.setFontSize(6.5);
+    doc.setFont('helvetica', 'bold');
+    if (saldoNetoPrevio < 0) {
+      doc.setTextColor(185, 28, 28); // Rojo oscuro sutil
+    } else if (saldoNetoPrevio > 0) {
+      doc.setTextColor(21, 128, 61); // Verde oscuro sutil
+    } else {
+      doc.setTextColor(...GRIS_MEDIO);
+    }
+    doc.text(subtextoSaldoPrevio, 150, yBox4 + 19, { align: 'right' });
+
+    // 4. Columna 4: Total a Cancelar / Pagar resultante
+    let tituloFinal = 'TOTAL A PAGAR';
+    let montoFinal = totalGeneral;
+    let subtextoFinal = 'Sin saldo pendiente previo';
+
+    if (saldoNetoPrevio < 0) {
+      tituloFinal = 'TOTAL A CANCELAR';
+      montoFinal = totalGeneral + Math.abs(saldoNetoPrevio);
+      subtextoFinal = 'Para cuenta al día';
+    } else if (saldoNetoPrevio > 0) {
+      if (saldoNetoPrevio < totalGeneral) {
+        tituloFinal = 'RESTO A PAGAR';
+        montoFinal = totalGeneral - saldoNetoPrevio;
+        subtextoFinal = 'Saldo a favor aplicado';
+      } else {
+        tituloFinal = 'TOTAL A PAGAR';
+        montoFinal = 0;
+        const remanente = saldoNetoPrevio - totalGeneral;
+        subtextoFinal = remanente > 0 ? `Resta a favor: $${remanente.toLocaleString('es-AR', { minimumFractionDigits: 2 })}` : 'Cubierto con saldo a favor';
+      }
+    }
+
+    doc.setTextColor(...NEGRO);
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'bold');
+    doc.text(tituloFinal, 158, yBox4 + 6);
+
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(...NEGRO);
+    doc.text(
+      `$${montoFinal.toLocaleString('es-AR', { minimumFractionDigits: 2 })}`,
+      191,
+      yBox4 + 14,
+      { align: 'right' }
+    );
+
+    doc.setFontSize(6.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(...GRIS_OSCURO);
+    doc.text(subtextoFinal, 191, yBox4 + 19, { align: 'right' });
+  } else {
+    // --- MODO NORMAL (CLIENTE AL DÍA): OBSERVACIONES Y TOTAL LIMPIO ---
+    // Fondo sutil para el Total
+    doc.setFillColor(248, 250, 252);
+    doc.rect(145, yBox4, 50, hBox4, 'F');
+
+    // Contorno exterior
+    doc.setDrawColor(...BORDE_TABLA);
+    doc.setLineWidth(0.4);
+    doc.rect(M, yBox4, UTIL, hBox4, 'S');
+
+    // Separador vertical entre Observaciones (15-145) y Total (145-195)
+    doc.setDrawColor(...GRIS_LINEA);
+    doc.setLineWidth(0.3);
+    doc.line(145, yBox4, 145, yBox4 + hBox4);
+
+    // 1. Observaciones en el lado izquierdo (amplio)
     doc.setTextColor(...GRIS_MEDIO);
     doc.setFontSize(7.5);
     doc.setFont('helvetica', 'bold');
@@ -288,41 +494,36 @@ async function generarInstanciaPDF(datos: DatosPresupuesto): Promise<jsPDF> {
     doc.setTextColor(...GRIS_OSCURO);
     doc.setFontSize(8);
     doc.setFont('helvetica', 'normal');
-    const lineasObs = doc.splitTextToSize(observaciones, 76);
-    doc.text(lineasObs.slice(0, 2), M + 4, yBox4 + 10.5);
+    const textoObs = observaciones.trim() || 'Sin observaciones adicionales.';
+    const lineasObs = doc.splitTextToSize(textoObs, 122);
+    doc.text(lineasObs.slice(0, 2), M + 4, yBox4 + 11);
+
+    // 2. Total del Pedido a la derecha
+    doc.setTextColor(...GRIS_MEDIO);
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'bold');
+    doc.text('TOTAL', 149, yBox4 + 6);
+
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(...NEGRO);
+    doc.text(
+      `$${totalGeneral.toLocaleString('es-AR', { minimumFractionDigits: 2 })}`,
+      M + UTIL - 4,
+      yBox4 + 14,
+      { align: 'right' }
+    );
+
+    doc.setFontSize(6.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(...GRIS_MEDIO);
+    doc.text(
+      `${items.length} ${items.length === 1 ? 'ítem' : 'ítems'}`,
+      M + UTIL - 4,
+      yBox4 + 19,
+      { align: 'right' }
+    );
   }
-
-  // 2. Deuda actual del cliente (Inmediatamente a la izquierda del Total)
-  doc.setTextColor(...GRIS_OSCURO);
-  doc.setFontSize(8);
-  doc.setFont('helvetica', 'bold');
-  doc.text('DEUDA ACTUAL', 102, yBox4 + 7);
-
-  doc.setFontSize(11);
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(...NEGRO);
-  doc.text(
-    `$${deudaCliente.toLocaleString('es-AR', { minimumFractionDigits: 2 })}`,
-    141,
-    yBox4 + 15,
-    { align: 'right' }
-  );
-
-  // 3. Total General (Lado derecho)
-  doc.setTextColor(...GRIS_OSCURO);
-  doc.setFontSize(8);
-  doc.setFont('helvetica', 'bold');
-  doc.text('TOTAL', 149, yBox4 + 7);
-
-  doc.setFontSize(12);
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(...NEGRO);
-  doc.text(
-    `$${totalGeneral.toLocaleString('es-AR', { minimumFractionDigits: 2 })}`,
-    M + UTIL - 4,
-    yBox4 + 15,
-    { align: 'right' }
-  );
 
   // ===== FOOTER GENERAL =====
   doc.setDrawColor(...GRIS_LINEA);
@@ -350,7 +551,8 @@ export async function generarPDF(datos: DatosPresupuesto): Promise<void> {
     year: 'numeric',
   });
   const fechaStr = fecha.replace(/\//g, '-');
-  const nombreArchivo = `presupuesto_${datos.cliente.nombre.replace(/\s+/g, '_').toLowerCase()}_${fechaStr}.pdf`;
+  const codigoDoc = datos.numeroPresupuesto ? `_${datos.numeroPresupuesto.replace(/[^a-zA-Z0-9_-]/g, '_')}` : '';
+  const nombreArchivo = `presupuesto_${datos.cliente.nombre.replace(/\s+/g, '_').toLowerCase()}${codigoDoc}_${fechaStr}.pdf`;
   doc.save(nombreArchivo);
 }
 

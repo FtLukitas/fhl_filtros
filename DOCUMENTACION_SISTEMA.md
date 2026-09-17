@@ -131,8 +131,13 @@ erDiagram
 | `codigo_fhl` | TEXT | Código de filtro |
 | `precio` | NUMERIC(12,2) | Precio especial acordado (prioridad máxima en facturación) |
 
-#### 7. `pedidos` & `items_pedido`
-- `pedidos`: Almacena el pedido con estado (`pendiente`, `confirmado`, `entregado`, `cancelado`), cliente vinculado, total, observaciones y soporte para papelera (`eliminado`).
+#### 7. `pedidos` & `items_pedido` (Entidad Unificada de Pedidos y Presupuestos)
+- **Unificación de Concepto**: En FHL Filtros, los presupuestos y los pedidos son la misma entidad operativa y documental. No existe una secuencia bifurcada ni prefijos separados (`PED-` vs `PRE-`).
+- **Numeración Secuencial**:
+  - Columna `numero_secuencial` (INTEGER) alimentada por la secuencia de PostgreSQL `pedidos_numero_seq`.
+  - Notación oficial: `YYYY-XXXX` (ej: `2026-0001`, `2026-0018`, `2026-0019`), centralizada en `lib/codigos.ts`.
+  - Sin hashes ni códigos hexadecimales derivados de UUID.
+- `pedidos`: Almacena el comprobante con estado (`pendiente`, `confirmado`, `entregado`, `cancelado`), cliente vinculado, `numero_secuencial`, total, observaciones y soporte para papelera (`eliminado`).
 - `items_pedido`: Desglose de filtros con cantidades y precio unitario pactado al momento de la venta.
 
 #### 8. `pagos` & `movimientos_saldo`
@@ -158,12 +163,23 @@ El panel está organizado en **6 módulos principales**:
 - **Edición Completa de Pedidos Existentes (`/admin/facturador?pedidoId=XYZ`)**:
   - Carga el cliente, observaciones y todos los filtros del pedido existente en modo edición.
   - Permite agregar/quitar filtros, cambiar cantidades o recalcular precios.
-  - Al hacer click en **"Guardar Cambios"**, actualiza el pedido y sus ítems en la base de datos sin duplicar registros.
-- **Generación de PDF**:
-  - Motor integrado con `jsPDF` y `jspdf-autotable`.
+  - Al hacer click en **"Guardar Cambios"**, actualiza el pedido y sus ítems en la base de datos sin duplicar registros y conservando su número secuencial.
+- **Motor de Comprobantes PDF (`lib/generarPDF.ts`)**:
+  - Título oficial estandarizado: **`Presupuesto Nº YYYY-XXXX`**.
+  - **Diseño Inteligente y Condicional de Liquidación (Recuadro 4)**:
+    - **Si el cliente está al día (`saldoNetoPrevio === 0`)**:
+      - Formato estándar de 2 bloques limpios: `OBSERVACIONES` (130 mm) a la izquierda y `TOTAL` a la derecha (50 mm).
+      - Muestra la cantidad de ítems (`X ítems`) debajo del importe.
+      - No imprime ningún texto ni columna de deuda/saldo para evitar confusiones al cliente.
+    - **Si el cliente posee Deuda Previa (`saldoNetoPrevio < 0`)**:
+      - Desglose contable de 4 bloques: `OBSERVACIONES` | `TOTAL PEDIDO` (con cantidad de ítems) | `SALDO PREVIO` (`-$XX.XXX,XX` / Deuda anterior) | `TOTAL A CANCELAR` (suma de pedido + deuda para saldar cuenta completa).
+    - **Si el cliente posee Saldo a Favor (`saldoNetoPrevio > 0`)**:
+      - Desglose contable de 4 bloques: aplica el crédito a favor automáticamente, informando el `RESTO A PAGAR` o, si cubre el total, `TOTAL A PAGAR: $0,00` con el `Resta a favor: $XX.XXX,XX`.
+    - **Precisión Cronológica**: Al reimprimir o ver pedidos históricos, el saldo previo se calcula excluyendo operaciones posteriores a la fecha de creación del comprobante.
   - Previsualización en vivo (iframe en escritorio, pantalla completa en móviles).
 
 ### 4.2. 📦 Pedidos y Remitos (`/admin/pedidos` y `/admin/pedidos/[id]`)
+- **Numeración Secuencial**: Visualización `#YYYY-XXXX` en tablas, modales de confirmación y fichas.
 - **Control de Ciclo de Vida**: Estados `pendiente` → `confirmado` → `entregado` / `cancelado`.
 - **Acceso Directo a Edición**: Botón ✏️ en la tabla de pedidos y botón destacado **"Editar Pedido"** en la ficha individual.
 - **Cobranzas y Cuentas**: Registro de pagos parciales o totales, imputación automática de saldo a favor del cliente y control de deuda pendiente.

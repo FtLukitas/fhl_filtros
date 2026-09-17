@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { generarPDF } from '@/lib/generarPDF';
+import { generarResumenCuentaPDF } from '@/lib/generarResumenCuentaPDF';
 import { formatearCodigo } from '@/lib/codigos';
 import type { Cliente, Pedido, Pago, Presupuesto, MovimientoSaldo, PrecioCliente, ListaPrecio } from '@/lib/types';
 import ModalAjusteSaldo from '../components/ModalAjusteSaldo';
@@ -26,6 +27,7 @@ export default function ClienteDetallePage({ params }: PageProps) {
   const [preciosCliente, setPreciosCliente] = useState<PrecioCliente[]>([]);
   const [cargando, setCargando] = useState(true);
   const [tabActivo, setTabActivo] = useState<'extracto' | 'pedidos' | 'pagos' | 'saldo' | 'presupuestos' | 'precios'>('extracto');
+  const [descargandoResumenPDF, setDescargandoResumenPDF] = useState(false);
 
   // Modal Saldo
   const [modalSaldo, setModalSaldo] = useState(false);
@@ -80,6 +82,8 @@ export default function ClienteDetallePage({ params }: PageProps) {
       setCliente(cl);
       setFormNombre(cl.nombre || '');
       setFormCuit(cl.cuit || '');
+      setFormEmail(cl.email || '');
+      setFormTelefono(cl.telefono || '');
       setFormDireccion(cl.direccion || '');
       setFormCiudad(cl.ciudad || '');
       setFormProvincia(cl.provincia || '');
@@ -88,6 +92,7 @@ export default function ClienteDetallePage({ params }: PageProps) {
       setFormDescuento(cl.descuento_predeterminado || 0);
       setFormPlazoPago(cl.plazo_pago || 'Contado');
       setFormListaPrecioId(cl.lista_precio_id || '');
+      setFormNotas(cl.notas || '');
 
       // 2. Pedidos con ítems
       const { data: dbPedidos } = await supabase
@@ -144,7 +149,17 @@ export default function ClienteDetallePage({ params }: PageProps) {
     .filter((p) => p.estado !== 'cancelado')
     .reduce((sum, p) => sum + Number(p.total || 0), 0);
 
-  const totalPagado = pagos.reduce((sum, p) => sum + Number(p.monto || 0), 0);
+  // Fondos efectivamente ingresados por el cliente (pagos externos + anticipos)
+  const pagosExternos = pagos
+    .filter((p) => p.metodo !== 'saldo_a_favor')
+    .reduce((sum, p) => sum + Number(p.monto || 0), 0);
+
+  const anticiposIngresados = movimientosSaldo
+    .filter((m) => Number(m.monto || 0) > 0 && m.tipo !== 'excedente')
+    .reduce((sum, m) => sum + Number(m.monto || 0), 0);
+
+  const totalAbonadoReal = pagosExternos + anticiposIngresados;
+  const totalPagado = totalAbonadoReal;
 
   const pagosPorPedido = new Map<string, number>();
   pagos.forEach((p) => {
@@ -170,50 +185,104 @@ export default function ClienteDetallePage({ params }: PageProps) {
     const lista: {
       id: string;
       fecha: string;
-      tipo: 'pedido' | 'pago' | 'ajuste';
+      tipo: 'pedido' | 'pago' | 'ajuste' | 'compensacion';
       titulo: string;
       subtitulo?: string;
       debito: number; // Cargo (-)
       credito: number; // Abono (+)
       montoNeto: number; // + crédito, - débito
+      montoCompensado?: number;
       referenciaId?: string;
+      estadoPago?: 'saldado' | 'parcial' | 'impago';
     }[] = [];
 
+    // Mapa de pagos por pedido para enriquecer la fila del pedido
+    const pagosPorPedMap = new Map<string, Pago[]>();
+    pagos.forEach((p) => {
+      if (p.pedido_id) {
+        const arr = pagosPorPedMap.get(p.pedido_id) || [];
+        arr.push(p);
+        pagosPorPedMap.set(p.pedido_id, arr);
+      }
+    });
+
+    // 1. Pedidos (Cargos reales a la cuenta corriente)
     pedidos
       .filter((p) => p.estado !== 'cancelado')
       .forEach((p) => {
         const t = Number(p.total || 0);
+        const pagosPed = pagosPorPedMap.get(p.id) || [];
+        const pagadoSaldoAFavor = pagosPed
+          .filter((pg) => pg.metodo === 'saldo_a_favor')
+          .reduce((acc, cur) => acc + Number(cur.monto || 0), 0);
+        const totalAbonado = pagosPed.reduce((acc, cur) => acc + Number(cur.monto || 0), 0);
+        const saldadoCompleto = totalAbonado >= t && t > 0;
+        const estadoPago: 'saldado' | 'parcial' | 'impago' =
+          saldadoCompleto
+            ? 'saldado'
+            : totalAbonado > 0
+            ? 'parcial'
+            : 'impago';
+
+        let tagSaldado = '';
+        if (saldadoCompleto && pagadoSaldoAFavor >= t) {
+          tagSaldado = ' • Saldado con Saldo a Favor';
+        } else if (pagadoSaldoAFavor > 0) {
+          tagSaldado = ` • $${pagadoSaldoAFavor.toLocaleString('es-AR', { minimumFractionDigits: 2 })} con Saldo a Favor`;
+        } else if (saldadoCompleto) {
+          tagSaldado = ' • Saldado';
+        }
+
         lista.push({
           id: `ped-${p.id}`,
           fecha: p.created_at,
           tipo: 'pedido',
           titulo: `Pedido #${formatearCodigo(p.numero_secuencial, p.created_at)}`,
-          subtitulo: `Estado: ${p.estado.toUpperCase()} • ${p.items?.length || 0} ítems`,
+          subtitulo: `Estado: ${p.estado.toUpperCase()} • ${p.items?.length || 0} ítems${tagSaldado}`,
           debito: t,
           credito: 0,
           montoNeto: -t,
           referenciaId: p.id,
+          estadoPago,
         });
       });
 
+    // 2. Pagos y Compensaciones
     pagos.forEach((p) => {
       const m = Number(p.monto || 0);
       const pedAsociado = p.pedido_id ? pedidos.find((x) => x.id === p.pedido_id) : null;
-      const refTexto = pedAsociado ? `Imputado a pedido #${formatearCodigo(pedAsociado.numero_secuencial, pedAsociado.created_at)}` : 'Cobranza directa a cuenta';
-      lista.push({
-        id: `pago-${p.id}`,
-        fecha: p.fecha || p.id,
-        tipo: 'pago',
-        titulo: `Pago / Cobranza (${p.metodo.toUpperCase()})`,
-        subtitulo: p.nota || refTexto,
-        debito: 0,
-        credito: m,
-        montoNeto: m,
-        referenciaId: p.pedido_id || undefined,
-      });
+      const refPed = pedAsociado ? `Pedido #${formatearCodigo(pedAsociado.numero_secuencial, pedAsociado.created_at)}` : 'cuenta';
+
+      if (p.metodo === 'saldo_a_favor') {
+        // La compensación de saldo a favor no es un ingreso externo.
+        // El débito del pedido ya figura en la fila de pedidos (con la aclaración "• Saldado con Saldo a Favor")
+        // y el crédito original ya figura en el Anticipo correspondiente.
+        // Omitimos esta fila para que cada pedido sea estrictamente 1 solo movimiento limpio en el extracto.
+        return;
+      } else {
+        // Cobranza real de fondos externos (efectivo, transferencia, cheque, etc.)
+        lista.push({
+          id: `pago-${p.id}`,
+          fecha: p.fecha || p.id,
+          tipo: 'pago',
+          titulo: `Pago / Cobranza (${p.metodo.toUpperCase()})`,
+          subtitulo: p.nota || `Imputado a ${refPed}`,
+          debito: 0,
+          credito: m,
+          montoNeto: m,
+          referenciaId: p.pedido_id || undefined,
+        });
+      }
     });
 
+    // 3. Movimientos de Saldo (ajustes directos y anticipos de cuenta corriente)
     movimientosSaldo.forEach((m) => {
+      // Omitir 'aplicado' porque ya está consolidado en la fila de 'compensacion' de pagos
+      // Omitir 'excedente' porque los fondos totales ya fueron acreditados en el pago
+      if (m.tipo === 'aplicado' || m.tipo === 'excedente') {
+        return;
+      }
+
       const v = Number(m.monto || 0);
       lista.push({
         id: `mov-${m.id}`,
@@ -260,6 +329,73 @@ export default function ClienteDetallePage({ params }: PageProps) {
     }
   };
 
+  // Descargar Resumen / Estado de Cuenta en PDF
+  const handleDescargarResumenPDF = async () => {
+    if (!cliente) return;
+    setDescargandoResumenPDF(true);
+    try {
+      // Mapear lista de pedidos detallada con desglose de deuda
+      const pedidosParaPDF = pedidos
+        .filter((p) => !p.eliminado && p.estado !== 'cancelado')
+        .map((p) => {
+          const tot = Number(p.total || 0);
+          const pagado = pagosPorPedido.get(p.id) || 0;
+          const deuda = Math.max(0, tot - pagado);
+          const estadoPago: 'saldado' | 'parcial' | 'impago' =
+            deuda === 0 && tot > 0
+              ? 'saldado'
+              : pagado > 0
+              ? 'parcial'
+              : 'impago';
+
+          return {
+            id: p.id,
+            numeroSecuencial: p.numero_secuencial,
+            fecha: p.created_at,
+            total: tot,
+            totalAbonado: pagado,
+            deuda,
+            estadoLogistico: p.estado,
+            estadoPago,
+            itemsCount: p.items?.length || 0,
+          };
+        });
+
+      // Mapear extracto cronológico (del más antiguo al más reciente para lectura formal)
+      const movimientosParaPDF = [...extractoCuenta]
+        .reverse()
+        .map((m) => ({
+          id: m.id,
+          fecha: m.fecha,
+          concepto: m.titulo,
+          detalle: m.subtitulo,
+          tipo: m.tipo,
+          debito: m.debito,
+          credito: m.credito,
+          montoCompensado: m.montoCompensado,
+          saldoAcumulado: m.saldoAcumulado,
+          referenciaId: m.referenciaId,
+          estadoPago: m.estadoPago,
+        }));
+
+      await generarResumenCuentaPDF({
+        cliente,
+        saldoNeto,
+        totalComprado,
+        totalPagado,
+        pedidos: pedidosParaPDF,
+        movimientos: movimientosParaPDF,
+      });
+
+      notificarOk('Resumen de Cuenta PDF descargado con éxito');
+    } catch (err: any) {
+      console.error('Error al generar resumen PDF:', err);
+      alert('Error al generar el PDF de resumen de cuenta: ' + (err.message || 'Error desconocido'));
+    } finally {
+      setDescargandoResumenPDF(false);
+    }
+  };
+
   // Guardar edición del cliente
   const handleGuardarCliente = async () => {
     if (!formNombre.trim()) {
@@ -273,6 +409,8 @@ export default function ClienteDetallePage({ params }: PageProps) {
     const payload = {
       nombre: formNombre.trim(),
       cuit: formCuit.trim() || null,
+      email: formEmail.trim() || null,
+      telefono: formTelefono.trim() || null,
       direccion: formDireccion.trim() || null,
       ciudad: formCiudad.trim() || null,
       provincia: formProvincia.trim() || null,
@@ -281,6 +419,7 @@ export default function ClienteDetallePage({ params }: PageProps) {
       descuento_predeterminado: Number(formDescuento) || 0,
       plazo_pago: formPlazoPago,
       lista_precio_id: formListaPrecioId || null,
+      notas: formNotas.trim() || null,
     };
 
     try {
@@ -568,6 +707,31 @@ export default function ClienteDetallePage({ params }: PageProps) {
             </button>
 
             <button
+              type="button"
+              onClick={handleDescargarResumenPDF}
+              disabled={descargandoResumenPDF}
+              className="bg-white hover:bg-slate-50 text-slate-800 border border-slate-300 px-3.5 py-2 rounded-md text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              title="Descargar Estado / Resumen de Cuenta en PDF"
+            >
+              {descargandoResumenPDF ? (
+                <>
+                  <div className="h-3.5 w-3.5 border-2 border-slate-700 border-t-transparent rounded-full animate-spin" />
+                  <span>Generando PDF...</span>
+                </>
+              ) : (
+                <>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                    <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                    <line x1="12" y1="18" x2="12" y2="12" />
+                    <polyline points="9 15 12 18 15 15" />
+                  </svg>
+                  <span>Resumen de Cuenta (PDF)</span>
+                </>
+              )}
+            </button>
+
+            <button
               onClick={() => setModalEditar(true)}
               className="bg-slate-100 hover:bg-slate-200 text-slate-800 px-3.5 py-2 rounded-md text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
             >
@@ -740,13 +904,13 @@ export default function ClienteDetallePage({ params }: PageProps) {
         {/* Total Pagado */}
         <div className="bg-white rounded-lg p-4 border border-slate-200 shadow-sm">
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
-            Total Pagos Recibidos
+            Total Fondos Ingresados
           </span>
           <span className="text-xl font-black text-emerald-700 font-mono">
-            ${totalPagado.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+            ${totalAbonadoReal.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
           </span>
           <span className="text-[11px] text-slate-400 block mt-1">
-            {pagos.length} cobranzas imputadas
+            Pagos externos y anticipos del cliente
           </span>
         </div>
 
@@ -844,7 +1008,28 @@ export default function ClienteDetallePage({ params }: PageProps) {
 
           {/* TAB 0: EXTRACTO DE CUENTA CORRIENTE (UNIFICADO) */}
           {tabActivo === 'extracto' && (
-            <div>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <p className="text-xs text-slate-500">
+                  Historial cronológico de cargos, cobranzas y compensaciones aplicadas a la cuenta.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleDescargarResumenPDF}
+                  disabled={descargandoResumenPDF}
+                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-md text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  title="Descargar Resumen Completo en PDF"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                    <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                    <line x1="12" y1="18" x2="12" y2="12" />
+                    <polyline points="9 15 12 18 15 15" />
+                  </svg>
+                  <span>{descargandoResumenPDF ? 'Generando PDF...' : 'Exportar Resumen (PDF)'}</span>
+                </button>
+              </div>
+
               {extractoCuenta.length === 0 ? (
                 <p className="text-xs text-slate-400 italic text-center py-8">
                   Este cliente no tiene movimientos de cuenta registrados todavía.
@@ -857,9 +1042,9 @@ export default function ClienteDetallePage({ params }: PageProps) {
                         <th className="p-3">Fecha</th>
                         <th className="p-3">Concepto / Comprobante</th>
                         <th className="p-3">Tipo</th>
-                        <th className="p-3 text-right">Cargo (Débito)</th>
-                        <th className="p-3 text-right">Abono (Crédito)</th>
-                        <th className="p-3 text-right">Saldo Neto Acumulado</th>
+                        <th className="p-3 text-right">Compras / Cargos (-)</th>
+                        <th className="p-3 text-right">Pagos / Abonos (+)</th>
+                        <th className="p-3 text-right">Saldo Acumulado</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -895,23 +1080,48 @@ export default function ClienteDetallePage({ params }: PageProps) {
                             )}
                           </td>
                           <td className="p-3">
-                            <span
-                              className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                                mov.tipo === 'pago'
-                                  ? 'bg-emerald-100 text-emerald-800'
-                                  : mov.tipo === 'pedido'
-                                  ? 'bg-red-100 text-red-800'
-                                  : 'bg-blue-100 text-blue-800'
-                              }`}
-                            >
-                              {mov.tipo}
-                            </span>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                                  mov.tipo === 'pago'
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : mov.tipo === 'pedido'
+                                    ? 'bg-slate-100 text-slate-800 border border-slate-200'
+                                    : mov.tipo === 'compensacion'
+                                    ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                                    : 'bg-blue-100 text-blue-800'
+                                }`}
+                              >
+                                {mov.tipo === 'compensacion' ? 'Compensación' : mov.tipo}
+                              </span>
+                              {mov.tipo === 'pedido' && mov.estadoPago && (
+                                <span
+                                  className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${
+                                    mov.estadoPago === 'saldado'
+                                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                      : mov.estadoPago === 'parcial'
+                                      ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                                      : 'bg-red-50 text-red-700 border border-red-200'
+                                  }`}
+                                >
+                                  {mov.estadoPago}
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="p-3 text-right font-mono font-bold text-red-600">
                             {mov.debito > 0 ? `-$${mov.debito.toLocaleString('es-AR', { minimumFractionDigits: 2 })}` : '—'}
                           </td>
                           <td className="p-3 text-right font-mono font-bold text-emerald-700">
-                            {mov.credito > 0 ? `+$${mov.credito.toLocaleString('es-AR', { minimumFractionDigits: 2 })}` : '—'}
+                            {mov.credito > 0 ? (
+                              `+$${mov.credito.toLocaleString('es-AR', { minimumFractionDigits: 2 })}`
+                            ) : mov.montoCompensado && mov.montoCompensado > 0 ? (
+                              <span className="text-purple-700 bg-purple-50 border border-purple-200 px-1.5 py-0.5 rounded text-[11px] font-bold inline-block">
+                                Compensado ${mov.montoCompensado.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+                              </span>
+                            ) : (
+                              '—'
+                            )}
                           </td>
                           <td className="p-3 text-right font-mono font-black">
                             <span

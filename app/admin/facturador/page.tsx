@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '../../../lib/supabase';
-import { generarPDF, obtenerPDFBlobUrl } from '../../../lib/generarPDF';
+import { generarPDF, obtenerPDFBlobUrl, obtenerEstadoCuentaCliente } from '../../../lib/generarPDF';
 import { formatearCodigo } from '../../../lib/codigos';
 import type {
   Cliente,
@@ -39,6 +39,8 @@ function FacturadorContenido() {
 
   // --- Estado principal ---
   const [cliente, setCliente] = useState<Cliente | null>(null);
+  const [saldoAFavorCliente, setSaldoAFavorCliente] = useState<number>(0);
+  const [cobrarConSaldoAFavor, setCobrarConSaldoAFavor] = useState<boolean>(true);
   const [preciosCliente, setPreciosCliente] = useState<Map<string, number>>(new Map());
   const [usarPreciosCliente, setUsarPreciosCliente] = useState<boolean>(true);
   
@@ -365,6 +367,11 @@ function FacturadorContenido() {
               const cl = data as Cliente;
               setCliente(cl);
               cargarPrecios(cl.id);
+              obtenerEstadoCuentaCliente(cl.id).then((estado) => {
+                const credito = estado.saldoNeto > 0 ? estado.saldoNeto : 0;
+                setSaldoAFavorCliente(credito);
+                setCobrarConSaldoAFavor(credito > 0);
+              }).catch(console.error);
 
               if (cl.lista_precio_id && listasPrecios.length > 0) {
                 const asignada = listasPrecios.find((l) => l.id === cl.lista_precio_id);
@@ -451,6 +458,11 @@ function FacturadorContenido() {
     if (borradorPendiente.cliente) {
       setCliente(borradorPendiente.cliente);
       cargarPrecios(borradorPendiente.cliente.id);
+      obtenerEstadoCuentaCliente(borradorPendiente.cliente.id).then((estado) => {
+        const credito = estado.saldoNeto > 0 ? estado.saldoNeto : 0;
+        setSaldoAFavorCliente(credito);
+        setCobrarConSaldoAFavor(credito > 0);
+      }).catch(console.error);
     }
     if (borradorPendiente.items) {
       setItems(borradorPendiente.items);
@@ -486,6 +498,17 @@ function FacturadorContenido() {
       if (c) {
         await cargarPrecios(c.id);
 
+        try {
+          const estado = await obtenerEstadoCuentaCliente(c.id);
+          const credito = estado.saldoNeto > 0 ? estado.saldoNeto : 0;
+          setSaldoAFavorCliente(credito);
+          setCobrarConSaldoAFavor(credito > 0);
+        } catch (e) {
+          console.error('Error al obtener saldo del cliente:', e);
+          setSaldoAFavorCliente(0);
+          setCobrarConSaldoAFavor(false);
+        }
+
         if (c.lista_precio_id && listasPrecios.length > 0) {
           const asignada = listasPrecios.find((l) => l.id === c.lista_precio_id);
           if (asignada) {
@@ -494,6 +517,8 @@ function FacturadorContenido() {
         }
       } else {
         setPreciosCliente(new Map());
+        setSaldoAFavorCliente(0);
+        setCobrarConSaldoAFavor(false);
       }
     },
     [listasPrecios, handleCambiarListaPrecio]
@@ -614,11 +639,16 @@ function FacturadorContenido() {
         router.push(`/admin/pedidos/${pedidoIdAEditar}`);
       } else {
         // --- CREACIÓN DE NUEVO PEDIDO ---
+        const montoAImputar = (!modoEdicion && cobrarConSaldoAFavor && saldoAFavorCliente > 0)
+          ? Math.min(total, saldoAFavorCliente)
+          : 0;
+        const estaTotalmenteCubierto = montoAImputar >= total;
+
         const { data: nuevoPedido, error: errPed } = await supabase
           .from('pedidos')
           .insert({
             cliente_id: cliente.id,
-            estado: 'pendiente',
+            estado: estaTotalmenteCubierto ? 'confirmado' : 'pendiente',
             total: total,
             observaciones: observaciones.trim() || null,
           })
@@ -634,6 +664,28 @@ function FacturadorContenido() {
           precio_unitario: it.precioUnitario,
         }));
         await supabase.from('items_pedido').insert(itemsPedidoDb);
+
+        // Si se imputa saldo a favor automáticamente:
+        if (montoAImputar > 0) {
+          const numFormateado = formatearCodigo(nuevoPedido.numero_secuencial, nuevoPedido.created_at);
+          await supabase.from('pagos').insert({
+            pedido_id: nuevoPedido.id,
+            cliente_id: cliente.id,
+            monto: montoAImputar,
+            metodo: 'saldo_a_favor',
+            nota: `Imputación automática al crear pedido #${numFormateado}`,
+            fecha: nuevoPedido.created_at || new Date().toISOString(),
+          });
+
+          await supabase.from('movimientos_saldo').insert({
+            cliente_id: cliente.id,
+            monto: -montoAImputar,
+            tipo: 'aplicado',
+            referencia_pedido_id: nuevoPedido.id,
+            nota: `Aplicado al pedido #${numFormateado}`,
+            fecha: nuevoPedido.created_at || new Date().toISOString(),
+          });
+        }
 
         // Limpiar borrador local
         try {
@@ -668,6 +720,8 @@ function FacturadorContenido() {
   const handleLimpiar = () => {
     if (confirm('¿Limpiar todo el formulario y descartar el borrador actual?')) {
       setCliente(null);
+      setSaldoAFavorCliente(0);
+      setCobrarConSaldoAFavor(false);
       setPreciosCliente(new Map());
       setItems([]);
       setObservaciones('');
@@ -899,7 +953,41 @@ function FacturadorContenido() {
 
           {/* SECCIÓN 5: Acciones */}
           {items.length > 0 && (
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+            <div className="space-y-3">
+              {/* Opción destacada para saldar con saldo a favor si el cliente tiene crédito disponible */}
+              {!modoEdicion && cliente && saldoAFavorCliente > 0 && (
+                <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl flex items-start gap-3 text-emerald-950 shadow-xs">
+                  <input
+                    id="check-cobro-saldo-favor"
+                    type="checkbox"
+                    checked={cobrarConSaldoAFavor}
+                    onChange={(e) => setCobrarConSaldoAFavor(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-emerald-300 text-emerald-800 focus:ring-emerald-600 cursor-pointer"
+                  />
+                  <label htmlFor="check-cobro-saldo-favor" className="cursor-pointer text-xs select-none flex-1">
+                    <span className="font-bold text-emerald-900 block">
+                      Saldar automáticamente con Saldo a Favor disponible
+                    </span>
+                    <span className="text-[11px] text-emerald-800 block mt-0.5 leading-relaxed">
+                      El cliente posee un crédito a favor de{' '}
+                      <strong>${saldoAFavorCliente.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</strong>.
+                      {cobrarConSaldoAFavor && (
+                        <>
+                          {' '}Se imputarán{' '}
+                          <strong>${Math.min(total, saldoAFavorCliente).toLocaleString('es-AR', { minimumFractionDigits: 2 })}</strong>
+                          {saldoAFavorCliente >= total ? (
+                            <span className="text-emerald-900 font-extrabold"> (El pedido quedará 100% saldado y confirmado)</span>
+                          ) : (
+                            <span className="text-amber-800 font-bold"> (Resta a pagar: ${(total - saldoAFavorCliente).toLocaleString('es-AR', { minimumFractionDigits: 2 })})</span>
+                          )}
+                        </>
+                      )}
+                    </span>
+                  </label>
+                </div>
+              )}
+
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white rounded-xl shadow-sm border border-slate-200 p-5">
               <div className="text-xs text-slate-500">
                 <span className="font-bold text-slate-700">{items.length}</span> ítem(s) •{' '}
                 <span className="font-black text-blue-900 text-base font-mono">
@@ -956,7 +1044,8 @@ function FacturadorContenido() {
                 </button>
               </div>
             </div>
-          )}
+          </div>
+        )}
         </div>
 
         {/* Previsualización (Columna derecha - 5 cols) */}

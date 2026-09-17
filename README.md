@@ -17,8 +17,9 @@ Plataforma integral para **FHL Filtros** que combina un catálogo digital de con
      - Carga interactiva con resolución de precios por cliente o lista.
      - **Autoguardado en tiempo real**: Protege el borrador en `localStorage` ante cortes de conexión o cierres de pestaña con restauración en 1 click.
      - **Modo Edición (`?pedidoId=XYZ`)**: Permite modificar cualquier pedido existente y sincronizar los ítems sin duplicar registros.
-     - Generación y descarga inmediata de comprobantes en PDF con previsualización interactiva.
+     - **Motor de Comprobantes PDF Inteligente**: Título unificado `Presupuesto Nº YYYY-XXXX`, previsualización en vivo y desglose financiero condicional (liquidación contable en 4 columnas si el cliente tiene saldo pendiente, o formato estándar limpio si está al día, manteniendo siempre el conteo de ítems).
    - 📦 **Gestión de Pedidos & Remitos (`/admin/pedidos` y `/admin/pedidos/[id]`)**:
+     - Numeración secuencial unificada anual (`#YYYY-XXXX`) sin códigos hexadecimales.
      - Control del ciclo de vida (`pendiente` → `confirmado` → `entregado` / `cancelado`).
      - Botón de edición rápida ✏️ y gestión de cobranzas con auto-acreditación de saldo a favor.
    - 👥 **Clientes & Cuenta Corriente (`/admin/clientes` y `/admin/clientes/[id]`)**:

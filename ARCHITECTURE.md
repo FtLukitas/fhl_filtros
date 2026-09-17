@@ -39,7 +39,8 @@ c:\fhl_filtros\
 ├── lib/
 │   ├── supabase.ts                   ← Cliente Singleton de Supabase
 │   ├── types.ts                      ← Modelos de datos TypeScript
-│   └── generarPDF.ts                 ← Generador de Comprobantes PDF (jsPDF)
+│   ├── codigos.ts                    ← Estandarización de Códigos Secuenciales (YYYY-XXXX)
+│   └── generarPDF.ts                 ← Generador de Comprobantes PDF & Liquidación Contable (jsPDF)
 └── DOCUMENTACION_SISTEMA.md          ← Manual Técnico Completo
 ```
 
@@ -155,7 +156,25 @@ sequenceDiagram
 
 ---
 
-## 4. Principios de Diseño y Estándares de Código
+## 4. Subsistema de Numeración Secuencial y Comprobantes PDF
+
+### 4.1. Unificación de Presupuestos y Pedidos
+En el modelo comercial de la empresa, los presupuestos y los pedidos constituyen la misma entidad comercial y documental:
+* **Secuencia de Base de Datos**: Respaldada por la secuencia `pedidos_numero_seq` en PostgreSQL y la columna `pedidos.numero_secuencial`.
+* **Notación Limpia**: `YYYY-XXXX` (ej: `2026-0001`, `2026-0018`, `2026-0019`), gestionada por el módulo `lib/codigos.ts`.
+* **Sin Hexadecimal**: Quedan erradicados los identificadores con hashes o UUID truncados.
+
+### 4.2. Motor de Liquidación y Estado de Cuenta en PDF (`lib/generarPDF.ts`)
+El Recuadro 4 adapta su estructura en base al balance cronológico del cliente antes de la emisión del comprobante:
+1. **Cliente al Día (`saldoNetoPrevio === 0`)**:
+   - Formato estándar de 2 bloques: Observaciones (130 mm) y Total del Pedido (50 mm) con el conteo de ítems (`X ítems`).
+   - Sin datos de saldo o deuda irrelevantes.
+2. **Cliente con Deuda o Saldo a Favor (`saldoNetoPrevio !== 0`)**:
+   - Formato de liquidación contable de 4 bloques: `OBSERVACIONES` | `TOTAL PEDIDO` (con ítems) | `SALDO PREVIO` (`Deuda anterior` o `Saldo a favor previo`) | `TOTAL A CANCELAR / RESTO A PAGAR`.
+
+---
+
+## 5. Principios de Diseño y Estándares de Código
 
 1. **Server Components por Defecto**: Las páginas cargan estructura estática y solo los árboles que demandan interactividad o estado (`useSearchParams`, inputs, drag & drop) se declaran con `'use client'`.
 2. **Control por URL**: El modal del catálogo público responde a `?filtro=CODIGO`, garantizando deep linking y respetando la navegación del historial del navegador sin estados locales frágiles.
@@ -163,3 +182,4 @@ sequenceDiagram
 4. **Resiliencia de Datos**:
    - Autoguardado reactivo para evitar pérdidas de trabajo por cortes de conexión.
    - Soporte de papelera (`soft-delete`) en pedidos, clientes, listas de precios y catálogo para prevenir borrados accidentales.
+5. **Consistencia Contable**: Toda emisión de comprobantes toma como referencia la fecha y el estado cronológico de la cuenta, garantizando que reimpresiones históricas reflejen la realidad exacta del momento en que se generaron.

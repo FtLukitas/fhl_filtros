@@ -11,7 +11,6 @@ export default function Navbar() {
   const links = [
     { name: 'Inicio', href: '/' },
     { name: 'Quiénes Somos', href: '/quienes-somos' },
-    { name: 'Contacto', href: '/contacto' },
   ];
 
   return (

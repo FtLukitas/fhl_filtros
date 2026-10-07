@@ -3,7 +3,6 @@
 import { usePathname } from 'next/navigation';
 import Navbar from './Navbar';
 import Footer from './Footer';
-import WhatsAppButton from './WhatsAppButton';
 
 export default function LayoutCondicional({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -18,7 +17,6 @@ export default function LayoutCondicional({ children }: { children: React.ReactN
       <Navbar />
       <div className="flex-grow">{children}</div>
       <Footer />
-      <WhatsAppButton />
     </>
   );
 }

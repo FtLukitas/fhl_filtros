@@ -12,8 +12,7 @@ La solución está construida sobre **Next.js (App Router)** y **Supabase (Postg
 c:\fhl_filtros\
 ├── app/
 │   ├── page.tsx                      ← Catálogo Público (Búsqueda por código o vehículo)
-│   ├── layout.tsx                    ← Layout Público (Navbar + WhatsApp + Footer)
-│   ├── contacto/page.tsx             ← Página de contacto institucional
+│   ├── layout.tsx                    ← Layout Público (Navbar + Footer)
 │   ├── quienes-somos/page.tsx        ← Página institucional
 │   │
 │   ├── admin/

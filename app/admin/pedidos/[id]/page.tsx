@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, use } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { generarPDF } from '@/lib/generarPDF';
+import { generarPDF, obtenerEstadoCuentaCliente } from '@/lib/generarPDF';
 import { formatearCodigo } from '@/lib/codigos';
 import type { Pedido, Pago, MetodoPago, EstadoPedido, EstadoPagoPedido } from '@/lib/types';
 
@@ -60,15 +60,20 @@ export default function PedidoDetallePage({ params }: PageProps) {
         .order('fecha', { ascending: false });
       setPagos((dbPagos as Pago[]) || []);
 
-      // 3. Cargar saldo a favor real del cliente
+      // 3. Cargar saldo a favor disponible real del cliente (excluyendo el pedido actual)
       if (dbPedido.cliente_id) {
-        const { data: dbSaldo } = await supabase
-          .from('movimientos_saldo')
-          .select('monto')
-          .eq('cliente_id', dbPedido.cliente_id);
+        try {
+          const estado = await obtenerEstadoCuentaCliente(dbPedido.cliente_id, null, pedidoId);
+          setSaldoCliente(estado.saldoNeto > 0 ? estado.saldoNeto : 0);
+        } catch {
+          const { data: dbSaldo } = await supabase
+            .from('movimientos_saldo')
+            .select('monto')
+            .eq('cliente_id', dbPedido.cliente_id);
 
-        const totalSaldo = (dbSaldo || []).reduce((acc: number, cur: any) => acc + Number(cur.monto || 0), 0);
-        setSaldoCliente(totalSaldo);
+          const totalSaldo = (dbSaldo || []).reduce((acc: number, cur: any) => acc + Number(cur.monto || 0), 0);
+          setSaldoCliente(Math.max(0, totalSaldo));
+        }
       }
     } catch (err) {
       console.error('Error al cargar detalle del pedido:', err);
@@ -335,7 +340,7 @@ export default function PedidoDetallePage({ params }: PageProps) {
   if (cargando || !pedido) {
     return (
       <div className="py-20 flex flex-col items-center justify-center gap-3">
-        <div className="h-8 w-8 border-3 border-blue-900 border-t-transparent rounded-full animate-spin" />
+        <div className="h-8 w-8 border-[3px] border-blue-900 border-t-transparent rounded-full animate-spin" />
         <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">
           Cargando detalle del pedido...
         </p>
@@ -450,7 +455,7 @@ export default function PedidoDetallePage({ params }: PageProps) {
             {!pedido.eliminado && pedido.estado !== 'cancelado' && (
               <Link
                 href={`/admin/facturador?pedidoId=${pedido.id}`}
-                className="bg-amber-500 hover:bg-amber-600 active:scale-[0.98] text-white px-3.5 py-2 rounded-md text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+                className="bg-amber-600 hover:bg-amber-700 active:scale-[0.98] text-white px-3.5 py-2 rounded-md text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
                 title="Modificar cliente, filtros o cantidades de este pedido"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

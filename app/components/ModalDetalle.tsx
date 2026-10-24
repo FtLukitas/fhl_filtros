@@ -13,14 +13,29 @@ const extraerMedida = (texto: string | null, etiqueta: string) => {
   return coincidencia ? coincidencia[1] : '-';
 };
 
-const normalizarImagenes = (imagenes: string | string[] | null): string[] => {
+const normalizarImagenes = (imagenes: string | string[] | null | undefined): string[] => {
   if (!imagenes) return [];
-  if (Array.isArray(imagenes)) return imagenes;
+  if (Array.isArray(imagenes)) {
+    return imagenes
+      .filter((img): img is string => typeof img === 'string' && img.trim().length > 0)
+      .map((img) => img.trim());
+  }
   if (typeof imagenes === 'string') {
+    const trimmed = imagenes.trim();
+    if (!trimmed) return [];
     try {
-      return JSON.parse(imagenes);
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((img): img is string => typeof img === 'string' && img.trim().length > 0)
+          .map((img) => img.trim());
+      }
+      if (typeof parsed === 'string' && parsed.trim().length > 0) {
+        return [parsed.trim()];
+      }
     } catch {
-      return [];
+      // Si no es JSON válido, es una URL directa
+      return [trimmed];
     }
   }
   return [];
@@ -91,7 +106,8 @@ export default function ModalDetalle({ filtro, onCerrar }: ModalDetalleProps) {
 
   const compartirFiltro = useCallback(async () => {
     if (!filtro?.codigo_fhl) return;
-    const url = `${window.location.origin}${pathname}?filtro=${filtro.codigo_fhl}`;
+    if (typeof window === 'undefined') return;
+    const url = `${window.location.origin}${pathname}?filtro=${encodeURIComponent(filtro.codigo_fhl)}`;
     try {
       if (navigator.share) {
         await navigator.share({ title: `FHL ${filtro.codigo_fhl}`, url });
@@ -210,9 +226,14 @@ export default function ModalDetalle({ filtro, onCerrar }: ModalDetalleProps) {
                       alt={`Vista ampliada del filtro FHL ${filtro.codigo_fhl}`}
                       className="max-w-full max-h-full object-contain drop-shadow-2xl"
                     />
-                    <span className="absolute top-6 md:top-10 right-6 md:right-10 text-white font-bold bg-white/10 hover:bg-white/20 transition-colors px-4 py-2 rounded-full text-[10px] uppercase tracking-widest backdrop-blur-sm">
+                    <button
+                      type="button"
+                      aria-label="Cerrar vista ampliada"
+                      onClick={() => setZoomActivo(false)}
+                      className="absolute top-6 md:top-10 right-6 md:right-10 text-white font-bold bg-white/10 hover:bg-white/20 transition-colors px-4 py-2 rounded-full text-[10px] uppercase tracking-widest backdrop-blur-sm cursor-pointer"
+                    >
                       Cerrar [ESC]
-                    </span>
+                    </button>
                   </div>
                 )}
 

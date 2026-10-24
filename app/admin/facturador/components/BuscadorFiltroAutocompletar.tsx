@@ -47,7 +47,7 @@ export default function BuscadorFiltroAutocompletar({ onSeleccionar }: BuscadorF
       const { data, error } = await supabase
         .from('Tabla A')
         .select('*')
-        .eq('eliminado', false)
+        .or('eliminado.is.null,eliminado.eq.false')
         .or(`codigo_fhl.ilike.%${termino}%,buscador_unificado.ilike.%${termino}%`)
         .limit(8);
 
@@ -182,6 +182,11 @@ export default function BuscadorFiltroAutocompletar({ onSeleccionar }: BuscadorF
               }`}
             >
               <span className="font-bold text-blue-900">{filtro.codigo_fhl}</span>
+              {filtro.activo === false && (
+                <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                  Interno
+                </span>
+              )}
               {filtro.descripcion_aplicacion && (
                 <span className="text-slate-500 ml-2 text-xs truncate">
                   {filtro.descripcion_aplicacion.slice(0, 60)}

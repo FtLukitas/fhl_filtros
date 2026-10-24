@@ -199,7 +199,7 @@ export default function AdminHeader() {
             <div className="relative lg:hidden">
               <button
                 onClick={() => setMenuAbierto(!menuAbierto)}
-                className="bg-blue-800 hover:bg-blue-750 text-white p-2 rounded-md text-xs font-bold flex items-center gap-1.5 border border-blue-700/60 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white cursor-pointer"
+                className="bg-blue-800 hover:bg-blue-700 text-white p-2 rounded-md text-xs font-bold flex items-center gap-1.5 border border-blue-700/60 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white cursor-pointer"
                 aria-expanded={menuAbierto}
                 aria-label={menuAbierto ? "Cerrar menú de administración" : "Abrir menú de administración móvil"}
                 aria-haspopup="menu"

@@ -38,7 +38,7 @@ export default function AdminAuthGuard({ children }: { children: React.ReactNode
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center">
         <div className="flex flex-col items-center gap-3">
-          <div className="h-8 w-8 border-3 border-blue-500 border-t-transparent rounded-full animate-spin" />
+          <div className="h-8 w-8 border-[3px] border-blue-500 border-t-transparent rounded-full animate-spin" />
           <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">
             Verificando sesión...
           </p>
@@ -48,7 +48,7 @@ export default function AdminAuthGuard({ children }: { children: React.ReactNode
   }
 
   return (
-    <div className="min-h-screen bg-slate-100 flex flex-col">
+    <div className="min-h-screen bg-slate-100 text-slate-900 flex flex-col">
       <AdminHeader />
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {children}

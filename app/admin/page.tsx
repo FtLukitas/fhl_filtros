@@ -33,12 +33,13 @@ export default function AdminDashboardPage() {
       const { data: dbClientes } = await supabase.from('clientes').select('*').eq('eliminado', false);
       const clientes = (dbClientes as Cliente[]) || [];
 
-      // 2. Pedidos no cancelados
+      // 2. Pedidos no cancelados ni en papelera
       const { data: dbPedidos } = await supabase
         .from('pedidos')
         .select('*, cliente:clientes(*), items:items_pedido(*)')
+        .or('eliminado.is.null,eliminado.eq.false')
         .order('created_at', { ascending: false });
-      const pedidos = (dbPedidos as Pedido[]) || [];
+      const pedidos = ((dbPedidos as Pedido[]) || []).filter((p) => !p.eliminado);
 
       // 3. Pagos
       const { data: dbPagos } = await supabase.from('pagos').select('*');
@@ -181,7 +182,7 @@ export default function AdminDashboardPage() {
   if (cargando) {
     return (
       <div className="py-20 flex flex-col items-center justify-center gap-3">
-        <div className="h-8 w-8 border-3 border-blue-900 border-t-transparent rounded-full animate-spin" />
+        <div className="h-8 w-8 border-[3px] border-blue-900 border-t-transparent rounded-full animate-spin" />
         <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">
           Cargando panel de control...
         </p>
@@ -407,7 +408,7 @@ export default function AdminDashboardPage() {
           <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">
             Módulos del Sistema
           </h3>
-          <span className="text-xs text-slate-400 font-medium">7 módulos disponibles</span>
+          <span className="text-xs text-slate-400 font-medium">{modulosPrincipales.length} módulos disponibles</span>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -515,7 +516,7 @@ export default function AdminDashboardPage() {
                       <td className="p-3 text-right">
                         <Link
                           href={`/admin/pedidos/${p.id}`}
-                          className="px-2.5 py-1 bg-slate-100 hover:bg-blue-900 hover:text-white rounded font-bold text-[11px] transition-colors"
+                          className="px-2.5 py-1 bg-slate-100 text-slate-700 hover:bg-blue-900 hover:text-white rounded font-bold text-[11px] transition-colors"
                         >
                           Ver →
                         </Link>

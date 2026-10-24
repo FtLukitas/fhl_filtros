@@ -168,6 +168,29 @@ function FacturadorContenido() {
     cargarListasPrecios();
   }, [cargarListasPrecios]);
 
+  // Cargar precios base de todo el catálogo para cálculo de listas porcentuales
+  useEffect(() => {
+    supabase
+      .from('Tabla A')
+      .select('codigo_fhl, precio')
+      .or('eliminado.is.null,eliminado.eq.false')
+      .then(({ data }) => {
+        if (data) {
+          const map = new Map<string, number>();
+          data.forEach((row: any) => {
+            if (row.codigo_fhl && typeof row.precio === 'number') {
+              map.set(row.codigo_fhl.trim().toUpperCase(), row.precio);
+            }
+          });
+          setPreciosBaseFiltros((prev) => {
+            const next = new Map(prev);
+            map.forEach((v, k) => next.set(k, v));
+            return next;
+          });
+        }
+      });
+  }, []);
+
   // Cargar precios específicos de la lista seleccionada si tiene
   useEffect(() => {
     if (!listaSeleccionada) return;
@@ -247,8 +270,9 @@ function FacturadorContenido() {
 
   // Cambiar lista de precios y recalcular automáticamente los ítems en la tabla
   const handleCambiarListaPrecio = useCallback(
-    async (nuevaLista: ListaPrecio) => {
+    async (nuevaLista: ListaPrecio, mapaPreciosClienteOverride?: Map<string, number>) => {
       setListaSeleccionada(nuevaLista);
+      const cliPrecios = mapaPreciosClienteOverride ?? preciosCliente;
 
       // Cargar items de la nueva lista
       const { data: dbItems } = await supabase
@@ -270,8 +294,8 @@ function FacturadorContenido() {
           const codNorm = it.codigo_fhl.toUpperCase();
           let precio = 0;
 
-          if (usarPreciosCliente && preciosCliente.has(codNorm)) {
-            precio = preciosCliente.get(codNorm)!;
+          if (usarPreciosCliente && cliPrecios.has(codNorm)) {
+            precio = cliPrecios.get(codNorm)!;
           } else if (nuevoMap.has(codNorm)) {
             precio = nuevoMap.get(codNorm)!;
           } else {
@@ -491,12 +515,24 @@ function FacturadorContenido() {
     setBorradorPendiente(null);
   };
 
-  // Seleccionar cliente
+  // Seleccionar cliente y recalcular tarifas
   const handleSeleccionarCliente = useCallback(
     async (c: Cliente | null) => {
       setCliente(c);
       if (c) {
-        await cargarPrecios(c.id);
+        // Cargar precios directos del cliente para evitar stale closure
+        const { data: dbPrecios } = await supabase
+          .from('precios_cliente')
+          .select('*')
+          .eq('cliente_id', c.id);
+
+        const mapaCli = new Map<string, number>();
+        if (dbPrecios) {
+          (dbPrecios as PrecioCliente[]).forEach((p) => {
+            mapaCli.set(p.codigo_fhl.toUpperCase(), p.precio);
+          });
+        }
+        setPreciosCliente(mapaCli);
 
         try {
           const estado = await obtenerEstadoCuentaCliente(c.id);
@@ -509,19 +545,65 @@ function FacturadorContenido() {
           setCobrarConSaldoAFavor(false);
         }
 
+        // Si el cliente tiene lista asignada, aplicarla pasando el mapa de precios
         if (c.lista_precio_id && listasPrecios.length > 0) {
           const asignada = listasPrecios.find((l) => l.id === c.lista_precio_id);
           if (asignada) {
-            await handleCambiarListaPrecio(asignada);
+            await handleCambiarListaPrecio(asignada, mapaCli);
+            return;
           }
         }
+
+        // Si no tiene lista asignada, recalcular ítems según el nuevo cliente y lista actual
+        setItems((prevItems) =>
+          prevItems.map((it) => {
+            const codNorm = it.codigo_fhl.toUpperCase();
+            let precio = 0;
+            if (usarPreciosCliente && mapaCli.has(codNorm)) {
+              precio = mapaCli.get(codNorm)!;
+            } else if (itemsListaEspecíficos.has(codNorm)) {
+              precio = itemsListaEspecíficos.get(codNorm)!;
+            } else {
+              const base = preciosBaseFiltros.get(codNorm) || 0;
+              if (base > 0) {
+                const factor = 1 + (Number(listaSeleccionada?.porcentaje || 0) / 100);
+                precio = Math.round(base * factor);
+              }
+            }
+            return {
+              ...it,
+              precioUnitario: precio > 0 ? precio : it.precioUnitario,
+            };
+          })
+        );
       } else {
         setPreciosCliente(new Map());
         setSaldoAFavorCliente(0);
         setCobrarConSaldoAFavor(false);
+
+        // Sin cliente: recalcular con lista seleccionada pura
+        setItems((prevItems) =>
+          prevItems.map((it) => {
+            const codNorm = it.codigo_fhl.toUpperCase();
+            let precio = 0;
+            if (itemsListaEspecíficos.has(codNorm)) {
+              precio = itemsListaEspecíficos.get(codNorm)!;
+            } else {
+              const base = preciosBaseFiltros.get(codNorm) || 0;
+              if (base > 0) {
+                const factor = 1 + (Number(listaSeleccionada?.porcentaje || 0) / 100);
+                precio = Math.round(base * factor);
+              }
+            }
+            return {
+              ...it,
+              precioUnitario: precio > 0 ? precio : it.precioUnitario,
+            };
+          })
+        );
       }
     },
-    [listasPrecios, handleCambiarListaPrecio]
+    [listasPrecios, handleCambiarListaPrecio, listaSeleccionada, itemsListaEspecíficos, preciosBaseFiltros, usarPreciosCliente]
   );
 
   // Agregar filtro a la lista de ítems
@@ -745,7 +827,7 @@ function FacturadorContenido() {
   if (cargandoEdicion) {
     return (
       <div className="py-20 flex flex-col items-center justify-center gap-3">
-        <div className="h-8 w-8 border-3 border-blue-900 border-t-transparent rounded-full animate-spin" />
+        <div className="h-8 w-8 border-[3px] border-blue-900 border-t-transparent rounded-full animate-spin" />
         <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">
           Cargando datos del pedido para editar...
         </p>

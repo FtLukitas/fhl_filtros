@@ -82,7 +82,13 @@ export default function BuscadorVehiculo({ onVerDetalle }: BuscadorVehiculoProps
       }
 
       // 2. Obtener códigos únicos asociados y verificar que estén activos y no eliminados en Tabla A
-      const codigosFiltros = Array.from(new Set(vehiculos.map((v) => v.filtro_asociado).filter(Boolean)));
+      const codigosFiltros = Array.from(
+        new Set(
+          vehiculos
+            .map((v) => v.filtro_asociado?.trim())
+            .filter((c): c is string => Boolean(c && c.length > 0))
+        )
+      );
       
       if (codigosFiltros.length === 0) {
         setListaResultados([]);
@@ -96,11 +102,13 @@ export default function BuscadorVehiculo({ onVerDetalle }: BuscadorVehiculoProps
         .eq('activo', true)
         .or('eliminado.is.null,eliminado.eq.false');
 
-      const codigosValidos = new Set((filtrosActivos || []).map((f) => f.codigo_fhl));
+      const codigosValidos = new Set(
+        (filtrosActivos || []).map((f) => f.codigo_fhl.trim().toUpperCase())
+      );
 
       // 3. Filtrar vehículos cuyo filtro asociado esté activo y visible
       const resultadosFiltrados = vehiculos.filter(
-        (v) => v.filtro_asociado && codigosValidos.has(v.filtro_asociado)
+        (v) => v.filtro_asociado && codigosValidos.has(v.filtro_asociado.trim().toUpperCase())
       );
 
       setListaResultados(resultadosFiltrados);

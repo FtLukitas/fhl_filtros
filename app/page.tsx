@@ -38,11 +38,12 @@ function CatalogoFHL() {
       return;
     }
 
+    setFiltroDetalle(null);
     const abortController = new AbortController();
 
     const cargar = async () => {
       try {
-        const { data } = await supabase
+        const { data, error } = await supabase
           .from('Tabla A')
           .select('*')
           .eq('codigo_fhl', codigo)
@@ -50,12 +51,22 @@ function CatalogoFHL() {
           .or('eliminado.is.null,eliminado.eq.false')
           .single();
 
-        if (!abortController.signal.aborted && data) {
+        if (abortController.signal.aborted) return;
+
+        if (data && !error) {
           setFiltroDetalle(data as Filtro);
+        } else {
+          // Filtro no existe, está inactivo (activo === false) o eliminado
+          setFiltroDetalle(null);
+          router.replace(pathname);
         }
       } catch (err: any) {
         if (err.name !== 'AbortError') {
           console.error(err);
+          if (!abortController.signal.aborted) {
+            setFiltroDetalle(null);
+            router.replace(pathname);
+          }
         }
       }
     };
@@ -65,7 +76,7 @@ function CatalogoFHL() {
     return () => {
       abortController.abort();
     };
-  }, [searchParams]);
+  }, [searchParams, pathname, router]);
 
   return (
     <main className="min-h-screen bg-gray-50 p-4 md:p-10 text-slate-800 relative">

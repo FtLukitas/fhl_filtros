@@ -54,7 +54,12 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
       if (!clienteSeleccionado) return;
       try {
         const [resPed, resPag, resMov] = await Promise.all([
-          supabase.from('pedidos').select('id, total').eq('cliente_id', clienteSeleccionado.id).neq('estado', 'cancelado'),
+          supabase
+            .from('pedidos')
+            .select('id, total')
+            .eq('cliente_id', clienteSeleccionado.id)
+            .neq('estado', 'cancelado')
+            .or('eliminado.is.null,eliminado.eq.false'),
           supabase.from('pagos').select('pedido_id, monto').eq('cliente_id', clienteSeleccionado.id),
           supabase.from('movimientos_saldo').select('monto').eq('cliente_id', clienteSeleccionado.id),
         ]);

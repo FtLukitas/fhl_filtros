@@ -53,6 +53,7 @@ export default function ClienteDetallePage({ params }: PageProps) {
   // Estado para nuevo precio
   const [nuevoCodigoFhl, setNuevoCodigoFhl] = useState('');
   const [nuevoPrecio, setNuevoPrecio] = useState('');
+  const [catalogoFiltros, setCatalogoFiltros] = useState<{ codigo_fhl: string; descripcion_aplicacion: string | null; precio: number | null }[]>([]);
   const [guardandoPrecio, setGuardandoPrecio] = useState(false);
   const [mensajeOk, setMensajeOk] = useState<string | null>(null);
 
@@ -133,6 +134,14 @@ export default function ClienteDetallePage({ params }: PageProps) {
         .eq('cliente_id', clienteId)
         .order('codigo_fhl', { ascending: true });
       setPreciosCliente((dbPrecios as PrecioCliente[]) || []);
+
+      // 7. Catálogo de filtros para autocompletado y validación
+      const { data: dbFiltros } = await supabase
+        .from('Tabla A')
+        .select('codigo_fhl, descripcion_aplicacion, precio')
+        .or('eliminado.is.null,eliminado.eq.false')
+        .order('codigo_fhl', { ascending: true });
+      setCatalogoFiltros(dbFiltros || []);
     } catch (err) {
       console.error(err);
     } finally {
@@ -446,9 +455,17 @@ export default function ClienteDetallePage({ params }: PageProps) {
     e.preventDefault();
     if (!nuevoCodigoFhl.trim() || !nuevoPrecio) return;
 
-    setGuardandoPrecio(true);
     const codigoUpper = nuevoCodigoFhl.trim().toUpperCase();
     const precioNum = parseFloat(nuevoPrecio);
+
+    // Validar que el código exista en el catálogo de Tabla A para evitar errores de tipeo
+    const existeEnCatalogo = catalogoFiltros.some((f) => f.codigo_fhl.trim().toUpperCase() === codigoUpper);
+    if (!existeEnCatalogo) {
+      alert(`El código "${codigoUpper}" no existe en el catálogo de filtros FHL. Verificá que esté bien escrito o seleccionalo del autocompletado.`);
+      return;
+    }
+
+    setGuardandoPrecio(true);
 
     try {
       const { error } = await supabase.from('precios_cliente').upsert(
@@ -598,7 +615,7 @@ export default function ClienteDetallePage({ params }: PageProps) {
   if (cargando && !cliente) {
     return (
       <div className="py-20 flex flex-col items-center justify-center gap-3">
-        <div className="h-8 w-8 border-3 border-blue-900 border-t-transparent rounded-full animate-spin" />
+        <div className="h-8 w-8 border-[3px] border-blue-900 border-t-transparent rounded-full animate-spin" />
         <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">
           Cargando ficha del cliente...
         </p>
@@ -1461,11 +1478,19 @@ export default function ClienteDetallePage({ params }: PageProps) {
                   <input
                     type="text"
                     required
+                    list="catalogo-filtros-fhl"
                     placeholder="Ej: FHL-001"
                     value={nuevoCodigoFhl}
                     onChange={(e) => setNuevoCodigoFhl(e.target.value)}
-                    className="w-full border border-slate-300 rounded px-3 py-1.5 text-xs text-slate-900 bg-white font-bold"
+                    className="w-full border border-slate-300 rounded px-3 py-1.5 text-xs text-slate-900 bg-white font-bold uppercase"
                   />
+                  <datalist id="catalogo-filtros-fhl">
+                    {catalogoFiltros.map((f) => (
+                      <option key={f.codigo_fhl} value={f.codigo_fhl}>
+                        {f.codigo_fhl} {f.descripcion_aplicacion ? `— ${f.descripcion_aplicacion}` : ''} {f.precio ? `($${Number(f.precio).toLocaleString('es-AR')})` : ''}
+                      </option>
+                    ))}
+                  </datalist>
                 </div>
 
                 <div className="w-40">

@@ -77,11 +77,12 @@ export default function ClientesAdminPage() {
       const listaClientes = (dbClientes as Cliente[]) || [];
       setClientes(listaClientes);
 
-      // 2. Cargar pedidos no cancelados para calcular compras y deudas
+      // 2. Cargar pedidos no cancelados ni en papelera para calcular compras y deudas
       const { data: dbPedidos } = await supabase
         .from('pedidos')
-        .select('id, cliente_id, total, estado')
-        .neq('estado', 'cancelado');
+        .select('id, cliente_id, total, estado, eliminado')
+        .neq('estado', 'cancelado')
+        .or('eliminado.is.null,eliminado.eq.false');
 
       // 3. Cargar pagos
       const { data: dbPagos } = await supabase.from('pagos').select('pedido_id, cliente_id, monto');
@@ -115,7 +116,7 @@ export default function ClientesAdminPage() {
 
         if (dbPedidos) {
           dbPedidos
-            .filter((p: any) => p.cliente_id === c.id)
+            .filter((p: any) => p.cliente_id === c.id && !p.eliminado)
             .forEach((p: any) => {
               const totalP = Number(p.total || 0);
               const pagadoP = pagosPorPedido.get(p.id) || 0;

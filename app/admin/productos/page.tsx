@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, Fragment } from 'react';
 import { supabase } from '@/lib/supabase';
-import type { Filtro, Vehiculo } from '@/lib/types';
+import type { Filtro, Vehiculo, ListaPrecio } from '@/lib/types';
 import ImagenUploader from './components/ImagenUploader';
 import ImportadorExcel from './components/ImportadorExcel';
 
@@ -36,6 +36,8 @@ export default function ProductosAdminPage() {
   // Datos
   const [filtros, setFiltros] = useState<Filtro[]>([]);
   const [vehiculos, setVehiculos] = useState<Vehiculo[]>([]);
+  const [listasActivas, setListasActivas] = useState<ListaPrecio[]>([]);
+  const [preciosPorFiltro, setPreciosPorFiltro] = useState<Record<string, Record<string, number>>>({});
 
   // Paginación
   const [pagina, setPagina] = useState(1);
@@ -44,6 +46,8 @@ export default function ProductosAdminPage() {
   // Estado de edición inline
   const [editandoFiltroId, setEditandoFiltroId] = useState<number | 'nuevo' | null>(null);
   const [filtroForm, setFiltroForm] = useState<Partial<Filtro>>({});
+  const [preciosForm, setPreciosForm] = useState<Record<string, number>>({});
+  const [codigoOriginal, setCodigoOriginal] = useState<string | null>(null);
 
   const [editandoVehiculoId, setEditandoVehiculoId] = useState<number | 'nuevo' | null>(null);
   const [vehiculoForm, setVehiculoForm] = useState<Partial<Vehiculo>>({});
@@ -70,13 +74,33 @@ export default function ProductosAdminPage() {
 
     query = query.order('codigo_fhl', { ascending: true });
 
-    const { data, error: err } = await query;
-    if (err) {
+    const [filtrosRes, listasRes, itemsRes] = await Promise.all([
+      query,
+      supabase.from('listas_precios').select('*').eq('eliminado', false).order('created_at', { ascending: true }),
+      supabase.from('items_lista_precio').select('*').range(0, 4999),
+    ]);
+
+    if (filtrosRes.error) {
       setError('Error al cargar filtros');
-      console.error(err);
+      console.error(filtrosRes.error);
     } else {
-      setFiltros((data as Filtro[]) || []);
+      setFiltros((filtrosRes.data as Filtro[]) || []);
     }
+
+    if (listasRes.data) {
+      setListasActivas(listasRes.data as ListaPrecio[]);
+    }
+
+    if (itemsRes.data) {
+      const matriz: Record<string, Record<string, number>> = {};
+      for (const it of itemsRes.data) {
+        const cod = (it.codigo_fhl || '').trim().toUpperCase();
+        if (!matriz[cod]) matriz[cod] = {};
+        matriz[cod][it.lista_id] = Number(it.precio || 0);
+      }
+      setPreciosPorFiltro(matriz);
+    }
+
     setCargando(false);
   }, [verEliminados]);
 
@@ -128,9 +152,20 @@ export default function ProductosAdminPage() {
     const equiv = filtroForm.equivalencias?.trim() || null;
     const desc = filtroForm.descripcion_aplicacion?.trim() || null;
     const dim = filtroForm.dimensiones?.trim() || null;
-    const precio = parseFloat(String(filtroForm.precio || 0)) || 0;
     const activo = filtroForm.activo !== false;
-    const buscadorUnificado = `${codigo} ${equiv || ''} ${desc || ''}`.replace(/[- ]/g, '').toLowerCase();
+
+    // Determinar precio de referencia para Tabla A (Mayorista Base -> es_predeterminada -> primer > 0)
+    const listaMayoristaBase = listasActivas.find((l) => l.nombre.toLowerCase().trim() === 'mayorista base');
+    const listaPredet = listasActivas.find((l) => l.es_predeterminada);
+    let precioRef = 0;
+    if (listaMayoristaBase && Number(preciosForm[listaMayoristaBase.id]) > 0) {
+      precioRef = Number(preciosForm[listaMayoristaBase.id]);
+    } else if (listaPredet && Number(preciosForm[listaPredet.id]) > 0) {
+      precioRef = Number(preciosForm[listaPredet.id]);
+    } else {
+      const primerP = Object.values(preciosForm).find((v) => Number(v) > 0);
+      precioRef = primerP ? Number(primerP) : (parseFloat(String(filtroForm.precio || 0)) || 0);
+    }
 
     try {
       if (editandoFiltroId === 'nuevo') {
@@ -139,15 +174,21 @@ export default function ProductosAdminPage() {
           equivalencias: equiv,
           dimensiones: dim,
           descripcion_aplicacion: desc,
-          buscador_unificado: buscadorUnificado,
           imagen_url: filtroForm.imagen_url || null,
-          precio,
+          precio: precioRef,
           activo,
           eliminado: false,
         });
         if (err) throw err;
-        notificarOk(`Filtro ${codigo} creado correctamente`);
       } else {
+        // Si el código cambió, actualización en cascada
+        if (codigoOriginal && codigo !== codigoOriginal.trim().toUpperCase()) {
+          const orig = codigoOriginal.trim().toUpperCase();
+          await supabase.from('items_lista_precio').update({ codigo_fhl: codigo }).eq('codigo_fhl', orig);
+          await supabase.from('Tabla B').update({ filtro_asociado: codigo }).eq('filtro_asociado', orig);
+          await supabase.from('precios_cliente').update({ codigo_fhl: codigo }).eq('codigo_fhl', orig);
+        }
+
         const { error: err } = await supabase
           .from('Tabla A')
           .update({
@@ -155,17 +196,31 @@ export default function ProductosAdminPage() {
             equivalencias: equiv,
             dimensiones: dim,
             descripcion_aplicacion: desc,
-            buscador_unificado: buscadorUnificado,
-            precio,
+            precio: precioRef,
             activo,
           })
           .eq('id', editandoFiltroId);
         if (err) throw err;
-        notificarOk(`Filtro ${codigo} actualizado correctamente`);
       }
 
+      // Upsert en lote sobre items_lista_precio para todas las listasActivas
+      if (listasActivas.length > 0) {
+        const payloadItems = listasActivas.map((l) => ({
+          lista_id: l.id,
+          codigo_fhl: codigo,
+          precio: Number(preciosForm[l.id] || 0),
+        }));
+        const { error: errItems } = await supabase
+          .from('items_lista_precio')
+          .upsert(payloadItems, { onConflict: 'lista_id,codigo_fhl' });
+        if (errItems) console.error('Error al sincronizar precios en listas:', errItems);
+      }
+
+      notificarOk(`Filtro ${codigo} guardado y sincronizado correctamente`);
       setEditandoFiltroId(null);
+      setCodigoOriginal(null);
       setFiltroForm({});
+      setPreciosForm({});
       await cargarFiltros();
     } catch (err: any) {
       console.error(err);
@@ -259,6 +314,11 @@ export default function ProductosAdminPage() {
     if (!confirm(`¿Eliminar DEFINITIVAMENTE "${nombre}"? Esta acción no se puede deshacer.`)) return;
     const { error: err } = await supabase.from(tabla).delete().eq('id', id);
     if (!err) {
+      if (tabla === 'Tabla A') {
+        const codUpper = nombre.trim().toUpperCase();
+        await supabase.from('items_lista_precio').delete().eq('codigo_fhl', codUpper);
+        await supabase.from('precios_cliente').delete().eq('codigo_fhl', codUpper);
+      }
       notificarOk(`"${nombre}" eliminado definitivamente`);
       if (tabla === 'Tabla A') cargarFiltros();
       else cargarVehiculos();
@@ -342,6 +402,12 @@ export default function ProductosAdminPage() {
             <button
               onClick={() => {
                 setEditandoFiltroId('nuevo');
+                setCodigoOriginal(null);
+                const preciosIniciales: Record<string, number> = {};
+                listasActivas.forEach((l) => {
+                  preciosIniciales[l.id] = 0;
+                });
+                setPreciosForm(preciosIniciales);
                 setFiltroForm({
                   codigo_fhl: '',
                   equivalencias: '',
@@ -521,7 +587,7 @@ export default function ProductosAdminPage() {
                   <th scope="col" className="p-3.5 w-48">Equivalencias OEM</th>
                   <th scope="col" className="p-3.5 w-28">Dimensiones</th>
                   <th scope="col" className="p-3.5">Aplicación</th>
-                  <th scope="col" className="p-3.5 w-28 text-right">Precio Base ($)</th>
+                  <th scope="col" className="p-3.5 w-44 text-right">Precios en Listas</th>
                   <th scope="col" className="p-3.5 w-28 text-center">En Catálogo</th>
                   <th scope="col" className="p-3.5 w-20 text-center">Fotos</th>
                   <th scope="col" className="p-3.5 w-28 text-right">Acciones</th>
@@ -530,87 +596,163 @@ export default function ProductosAdminPage() {
               <tbody className="divide-y divide-slate-100">
                 {/* Fila nuevo filtro */}
                 {editandoFiltroId === 'nuevo' && (
-                  <tr className="bg-blue-50/60 animate-in fade-in duration-150">
-                    <td className="p-2">
-                      <input
-                        type="text"
-                        autoFocus
-                        placeholder="Ej: FHL-001"
-                        value={filtroForm.codigo_fhl || ''}
-                        onChange={(e) => setFiltroForm({ ...filtroForm, codigo_fhl: e.target.value })}
-                        className="w-full border border-blue-300 rounded px-2 py-1 font-bold text-blue-900 bg-white"
-                      />
-                    </td>
-                    <td className="p-2">
-                      <input
-                        type="text"
-                        placeholder="Equivalencias..."
-                        value={filtroForm.equivalencias || ''}
-                        onChange={(e) => setFiltroForm({ ...filtroForm, equivalencias: e.target.value })}
-                        className="w-full border border-slate-300 rounded px-2 py-1 bg-white"
-                      />
-                    </td>
-                    <td className="p-2">
-                      <input
-                        type="text"
-                        placeholder="Largo: 200..."
-                        value={filtroForm.dimensiones || ''}
-                        onChange={(e) => setFiltroForm({ ...filtroForm, dimensiones: e.target.value })}
-                        className="w-full border border-slate-300 rounded px-2 py-1 bg-white"
-                      />
-                    </td>
-                    <td className="p-2">
-                      <input
-                        type="text"
-                        placeholder="Aplicación..."
-                        value={filtroForm.descripcion_aplicacion || ''}
-                        onChange={(e) => setFiltroForm({ ...filtroForm, descripcion_aplicacion: e.target.value })}
-                        className="w-full border border-slate-300 rounded px-2 py-1 bg-white"
-                      />
-                    </td>
-                    <td className="p-2">
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        placeholder="0.00"
-                        value={filtroForm.precio ?? ''}
-                        onChange={(e) => setFiltroForm({ ...filtroForm, precio: parseFloat(e.target.value) || 0 })}
-                        className="w-full border border-slate-300 rounded px-2 py-1 bg-white font-mono font-bold text-right text-slate-900"
-                      />
-                    </td>
-                    <td className="p-2 text-center">
-                      <select
-                        value={filtroForm.activo !== false ? 'si' : 'no'}
-                        onChange={(e) => setFiltroForm({ ...filtroForm, activo: e.target.value === 'si' })}
-                        className="border border-slate-300 rounded px-2 py-1 bg-white text-[11px] font-bold text-slate-800"
-                      >
-                        <option value="si">Visible</option>
-                        <option value="no">Oculto</option>
-                      </select>
-                    </td>
-                    <td className="p-2 text-center text-slate-400 italic text-[11px]">
-                      —
-                    </td>
-                    <td className="p-2 text-right space-x-1">
-                      <button
-                        onClick={guardarFiltro}
-                        disabled={guardando}
-                        className="px-2.5 py-1 bg-green-600 hover:bg-green-700 text-white rounded font-bold text-[11px]"
-                      >
-                        {guardando ? '...' : 'Crear'}
-                      </button>
-                      <button
-                        onClick={() => {
-                          setEditandoFiltroId(null);
-                          setFiltroForm({});
-                        }}
-                        className="px-2.5 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded font-bold text-[11px]"
-                      >
-                        Cancelar
-                      </button>
-                    </td>
-                  </tr>
+                  <Fragment key="nuevo-filtro">
+                    <tr className="bg-blue-50/60 animate-in fade-in duration-150">
+                      <td className="p-2">
+                        <input
+                          type="text"
+                          autoFocus
+                          placeholder="Ej: FHL-001"
+                          value={filtroForm.codigo_fhl || ''}
+                          onChange={(e) => setFiltroForm({ ...filtroForm, codigo_fhl: e.target.value })}
+                          className="w-full border border-blue-300 rounded px-2 py-1 font-bold text-blue-900 bg-white"
+                        />
+                      </td>
+                      <td className="p-2">
+                        <input
+                          type="text"
+                          placeholder="Equivalencias..."
+                          value={filtroForm.equivalencias || ''}
+                          onChange={(e) => setFiltroForm({ ...filtroForm, equivalencias: e.target.value })}
+                          className="w-full border border-slate-300 rounded px-2 py-1 bg-white text-slate-900 placeholder:text-slate-400"
+                        />
+                      </td>
+                      <td className="p-2">
+                        <input
+                          type="text"
+                          placeholder="Largo: 200..."
+                          value={filtroForm.dimensiones || ''}
+                          onChange={(e) => setFiltroForm({ ...filtroForm, dimensiones: e.target.value })}
+                          className="w-full border border-slate-300 rounded px-2 py-1 bg-white text-slate-900 placeholder:text-slate-400"
+                        />
+                      </td>
+                      <td className="p-2">
+                        <input
+                          type="text"
+                          placeholder="Aplicación..."
+                          value={filtroForm.descripcion_aplicacion || ''}
+                          onChange={(e) => setFiltroForm({ ...filtroForm, descripcion_aplicacion: e.target.value })}
+                          className="w-full border border-slate-300 rounded px-2 py-1 bg-white text-slate-900 placeholder:text-slate-400"
+                        />
+                      </td>
+                      <td className="p-2 text-right">
+                        <span className="text-[10px] font-bold text-blue-800 bg-blue-100/80 px-2 py-1 rounded border border-blue-200">
+                          Tarifas en panel ↓
+                        </span>
+                      </td>
+                      <td className="p-2 text-center">
+                        <select
+                          value={filtroForm.activo !== false ? 'si' : 'no'}
+                          onChange={(e) => setFiltroForm({ ...filtroForm, activo: e.target.value === 'si' })}
+                          className="border border-slate-300 rounded px-2 py-1 bg-white text-[11px] font-bold text-slate-800"
+                        >
+                          <option value="si">Visible</option>
+                          <option value="no">Oculto</option>
+                        </select>
+                      </td>
+                      <td className="p-2 text-center text-slate-400 italic text-[11px]">
+                        —
+                      </td>
+                      <td className="p-2 text-right space-x-1">
+                        <button
+                          onClick={guardarFiltro}
+                          disabled={guardando}
+                          className="px-2.5 py-1 bg-green-600 hover:bg-green-700 text-white rounded font-bold text-[11px] cursor-pointer"
+                        >
+                          {guardando ? '...' : 'Crear'}
+                        </button>
+                        <button
+                          onClick={() => {
+                            setEditandoFiltroId(null);
+                            setCodigoOriginal(null);
+                            setFiltroForm({});
+                            setPreciosForm({});
+                          }}
+                          className="px-2.5 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded font-bold text-[11px] cursor-pointer"
+                        >
+                          Cancelar
+                        </button>
+                      </td>
+                    </tr>
+
+                    <tr className="bg-blue-50/50 border-b border-blue-200">
+                      <td colSpan={8} className="p-3">
+                        <div className="bg-white border border-blue-200 rounded-lg p-3 shadow-xs">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2.5 pb-2 border-b border-slate-100">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-black text-slate-800 uppercase tracking-wide">
+                                Tarifas de este Filtro por Lista de Precios
+                              </span>
+                              <span className="text-[10px] text-slate-500 font-medium">
+                                (Se guardarán y sincronizarán en las 5 listas)
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const baseLista =
+                                  listasActivas.find((l) => l.nombre.toLowerCase().includes('base')) || listasActivas[0];
+                                const precioBase = baseLista ? preciosForm[baseLista.id] || 0 : 0;
+                                const nuevoPrecios: Record<string, number> = {};
+                                listasActivas.forEach((l) => {
+                                  nuevoPrecios[l.id] = precioBase;
+                                });
+                                setPreciosForm(nuevoPrecios);
+                              }}
+                              className="text-[11px] font-bold text-blue-700 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 px-2.5 py-1 rounded border border-blue-200 transition-colors cursor-pointer w-fit"
+                            >
+                              Copiar precio de Mayorista Base a todas
+                            </button>
+                          </div>
+
+                          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                            {listasActivas.map((lista) => {
+                              const esBase = lista.nombre.toLowerCase().includes('base');
+                              return (
+                                <div
+                                  key={lista.id}
+                                  className={`p-2 rounded border transition-colors ${
+                                    esBase ? 'bg-amber-50/60 border-amber-300' : 'bg-slate-50 border-slate-200'
+                                  }`}
+                                >
+                                  <div className="flex items-center justify-between mb-1">
+                                    <label className="text-[10px] font-black uppercase text-slate-700 truncate" title={lista.nombre}>
+                                      {lista.nombre}
+                                    </label>
+                                    {lista.es_predeterminada && (
+                                      <span className="text-[8px] font-black uppercase bg-blue-100 text-blue-800 px-1 rounded">
+                                        Predet.
+                                      </span>
+                                    )}
+                                    {esBase && (
+                                      <span className="text-[8px] font-black uppercase bg-amber-200 text-amber-900 px-1 rounded">
+                                        Base Catálogo
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="relative">
+                                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 font-mono text-xs">$</span>
+                                    <input
+                                      type="number"
+                                      step="0.01"
+                                      min="0"
+                                      value={preciosForm[lista.id] ?? ''}
+                                      onChange={(e) => {
+                                        const val = parseFloat(e.target.value) || 0;
+                                        setPreciosForm((prev) => ({ ...prev, [lista.id]: val }));
+                                      }}
+                                      className="w-full pl-6 pr-2 py-1 bg-white border border-slate-300 rounded text-xs font-mono font-bold text-slate-900 text-right focus:border-blue-500 focus:outline-none"
+                                      placeholder="0.00"
+                                    />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  </Fragment>
                 )}
 
                 {cargando ? (
@@ -636,86 +778,163 @@ export default function ProductosAdminPage() {
 
                     if (esEditando) {
                       return (
-                        <tr key={f.id} className="bg-amber-50/60">
-                          <td className="p-2">
-                            <input
-                              type="text"
-                              value={filtroForm.codigo_fhl || ''}
-                              onChange={(e) => setFiltroForm({ ...filtroForm, codigo_fhl: e.target.value })}
-                              className="w-full border border-blue-300 rounded px-2 py-1 font-bold text-blue-900 bg-white"
-                            />
-                          </td>
-                          <td className="p-2">
-                            <input
-                              type="text"
-                              value={filtroForm.equivalencias || ''}
-                              onChange={(e) => setFiltroForm({ ...filtroForm, equivalencias: e.target.value })}
-                              className="w-full border border-slate-300 rounded px-2 py-1 bg-white"
-                            />
-                          </td>
-                          <td className="p-2">
-                            <input
-                              type="text"
-                              value={filtroForm.dimensiones || ''}
-                              onChange={(e) => setFiltroForm({ ...filtroForm, dimensiones: e.target.value })}
-                              className="w-full border border-slate-300 rounded px-2 py-1 bg-white"
-                            />
-                          </td>
-                          <td className="p-2">
-                            <input
-                              type="text"
-                              value={filtroForm.descripcion_aplicacion || ''}
-                              onChange={(e) => setFiltroForm({ ...filtroForm, descripcion_aplicacion: e.target.value })}
-                              className="w-full border border-slate-300 rounded px-2 py-1 bg-white"
-                            />
-                          </td>
-                          <td className="p-2">
-                            <input
-                              type="number"
-                              step="0.01"
-                              min="0"
-                              value={filtroForm.precio ?? ''}
-                              onChange={(e) => setFiltroForm({ ...filtroForm, precio: parseFloat(e.target.value) || 0 })}
-                              className="w-full border border-slate-300 rounded px-2 py-1 bg-white font-mono font-bold text-right text-slate-900"
-                            />
-                          </td>
-                          <td className="p-2 text-center">
-                            <select
-                              value={filtroForm.activo !== false ? 'si' : 'no'}
-                              onChange={(e) => setFiltroForm({ ...filtroForm, activo: e.target.value === 'si' })}
-                              className="border border-slate-300 rounded px-2 py-1 bg-white text-[11px] font-bold text-slate-800"
-                            >
-                              <option value="si">Visible</option>
-                              <option value="no">Oculto</option>
-                            </select>
-                          </td>
-                          <td className="p-2 text-center">
-                            <button
-                              onClick={() => setUploaderFiltro({ id: f.id, codigo: f.codigo_fhl, imagenes: fotos })}
-                              className="text-[11px] bg-blue-50 text-blue-800 font-bold px-2 py-1 rounded border border-blue-200"
-                            >
-                              Fotos ({fotos.length})
-                            </button>
-                          </td>
-                          <td className="p-2 text-right space-x-1">
-                            <button
-                              onClick={guardarFiltro}
-                              disabled={guardando}
-                              className="px-2.5 py-1 bg-blue-900 hover:bg-blue-800 text-white rounded font-bold text-[11px]"
-                            >
-                              {guardando ? '...' : 'Guardar'}
-                            </button>
-                            <button
-                              onClick={() => {
-                                setEditandoFiltroId(null);
-                                setFiltroForm({});
-                              }}
-                              className="px-2.5 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded font-bold text-[11px]"
-                            >
-                              Cancelar
-                            </button>
-                          </td>
-                        </tr>
+                        <Fragment key={f.id}>
+                          <tr className="bg-amber-50/60">
+                            <td className="p-2">
+                              <input
+                                type="text"
+                                value={filtroForm.codigo_fhl || ''}
+                                onChange={(e) => setFiltroForm({ ...filtroForm, codigo_fhl: e.target.value })}
+                                className="w-full border border-blue-300 rounded px-2 py-1 font-bold text-blue-900 bg-white"
+                              />
+                            </td>
+                            <td className="p-2">
+                              <input
+                                type="text"
+                                value={filtroForm.equivalencias || ''}
+                                onChange={(e) => setFiltroForm({ ...filtroForm, equivalencias: e.target.value })}
+                                className="w-full border border-slate-300 rounded px-2 py-1 bg-white text-slate-900 placeholder:text-slate-400"
+                              />
+                            </td>
+                            <td className="p-2">
+                              <input
+                                type="text"
+                                value={filtroForm.dimensiones || ''}
+                                onChange={(e) => setFiltroForm({ ...filtroForm, dimensiones: e.target.value })}
+                                className="w-full border border-slate-300 rounded px-2 py-1 bg-white text-slate-900 placeholder:text-slate-400"
+                              />
+                            </td>
+                            <td className="p-2">
+                              <input
+                                type="text"
+                                value={filtroForm.descripcion_aplicacion || ''}
+                                onChange={(e) => setFiltroForm({ ...filtroForm, descripcion_aplicacion: e.target.value })}
+                                className="w-full border border-slate-300 rounded px-2 py-1 bg-white text-slate-900 placeholder:text-slate-400"
+                              />
+                            </td>
+                            <td className="p-2 text-right">
+                              <span className="text-[10px] font-bold text-amber-900 bg-amber-100 px-2 py-1 rounded border border-amber-300">
+                                Tarifas en panel ↓
+                              </span>
+                            </td>
+                            <td className="p-2 text-center">
+                              <select
+                                value={filtroForm.activo !== false ? 'si' : 'no'}
+                                onChange={(e) => setFiltroForm({ ...filtroForm, activo: e.target.value === 'si' })}
+                                className="border border-slate-300 rounded px-2 py-1 bg-white text-[11px] font-bold text-slate-800"
+                              >
+                                <option value="si">Visible</option>
+                                <option value="no">Oculto</option>
+                              </select>
+                            </td>
+                            <td className="p-2 text-center">
+                              <button
+                                onClick={() => setUploaderFiltro({ id: f.id, codigo: f.codigo_fhl, imagenes: fotos })}
+                                className="text-[11px] bg-blue-50 text-blue-800 font-bold px-2 py-1 rounded border border-blue-200"
+                              >
+                                Fotos ({fotos.length})
+                              </button>
+                            </td>
+                            <td className="p-2 text-right space-x-1">
+                              <button
+                                onClick={guardarFiltro}
+                                disabled={guardando}
+                                className="px-2.5 py-1 bg-blue-900 hover:bg-blue-800 text-white rounded font-bold text-[11px] cursor-pointer"
+                              >
+                                {guardando ? '...' : 'Guardar'}
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setEditandoFiltroId(null);
+                                  setCodigoOriginal(null);
+                                  setFiltroForm({});
+                                  setPreciosForm({});
+                                }}
+                                className="px-2.5 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded font-bold text-[11px] cursor-pointer"
+                              >
+                                Cancelar
+                              </button>
+                            </td>
+                          </tr>
+
+                          <tr className="bg-amber-50/40 border-b border-amber-200">
+                            <td colSpan={8} className="p-3">
+                              <div className="bg-white border border-amber-300 rounded-lg p-3 shadow-xs">
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2.5 pb-2 border-b border-slate-100">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs font-black text-slate-800 uppercase tracking-wide">
+                                      Tarifas de {f.codigo_fhl} por Lista de Precios
+                                    </span>
+                                    <span className="text-[10px] text-slate-500 font-medium">
+                                      (Se guardarán y sincronizarán en las 5 listas)
+                                    </span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const baseLista =
+                                        listasActivas.find((l) => l.nombre.toLowerCase().includes('base')) || listasActivas[0];
+                                      const precioBase = baseLista ? preciosForm[baseLista.id] || 0 : 0;
+                                      const nuevoPrecios: Record<string, number> = {};
+                                      listasActivas.forEach((l) => {
+                                        nuevoPrecios[l.id] = precioBase;
+                                      });
+                                      setPreciosForm(nuevoPrecios);
+                                    }}
+                                    className="text-[11px] font-bold text-amber-900 hover:text-amber-950 bg-amber-50 hover:bg-amber-100 px-2.5 py-1 rounded border border-amber-200 transition-colors cursor-pointer w-fit"
+                                  >
+                                    Copiar precio de Mayorista Base a todas
+                                  </button>
+                                </div>
+
+                                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                                  {listasActivas.map((lista) => {
+                                    const esBase = lista.nombre.toLowerCase().includes('base');
+                                    return (
+                                      <div
+                                        key={lista.id}
+                                        className={`p-2 rounded border transition-colors ${
+                                          esBase ? 'bg-amber-50/80 border-amber-400' : 'bg-slate-50 border-slate-200'
+                                        }`}
+                                      >
+                                        <div className="flex items-center justify-between mb-1">
+                                          <label className="text-[10px] font-black uppercase text-slate-700 truncate" title={lista.nombre}>
+                                            {lista.nombre}
+                                          </label>
+                                          {lista.es_predeterminada && (
+                                            <span className="text-[8px] font-black uppercase bg-blue-100 text-blue-800 px-1 rounded">
+                                              Predet.
+                                            </span>
+                                          )}
+                                          {esBase && (
+                                            <span className="text-[8px] font-black uppercase bg-amber-200 text-amber-900 px-1 rounded">
+                                              Base Catálogo
+                                            </span>
+                                          )}
+                                        </div>
+                                        <div className="relative">
+                                          <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 font-mono text-xs">$</span>
+                                          <input
+                                            type="number"
+                                            step="0.01"
+                                            min="0"
+                                            value={preciosForm[lista.id] ?? ''}
+                                            onChange={(e) => {
+                                              const val = parseFloat(e.target.value) || 0;
+                                              setPreciosForm((prev) => ({ ...prev, [lista.id]: val }));
+                                            }}
+                                            className="w-full pl-6 pr-2 py-1 bg-white border border-slate-300 rounded text-xs font-mono font-bold text-slate-900 text-right focus:border-amber-500 focus:outline-none"
+                                            placeholder="0.00"
+                                          />
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        </Fragment>
                       );
                     }
 
@@ -733,12 +952,66 @@ export default function ProductosAdminPage() {
                         <td className="p-3.5 text-slate-600 truncate max-w-xs" title={f.descripcion_aplicacion || ''}>
                           {f.descripcion_aplicacion || '—'}
                         </td>
-                        <td className="p-3.5 text-right font-mono font-bold text-slate-800">
-                          {Number(f.precio || 0) > 0 ? (
-                            `$${Number(f.precio).toLocaleString('es-AR', { minimumFractionDigits: 2 })}`
-                          ) : (
-                            <span className="text-slate-400 font-normal">Sin precio</span>
-                          )}
+                        <td className="p-3.5 text-right">
+                          {(() => {
+                            const codUpper = f.codigo_fhl.trim().toUpperCase();
+                            const preciosFiltro = preciosPorFiltro[codUpper] || {};
+                            const listaPredet = listasActivas.find((l) => l.es_predeterminada) || listasActivas[0];
+                            const precioPredet = preciosFiltro[listaPredet?.id] ?? f.precio ?? 0;
+                            const tieneCero =
+                              listasActivas.length > 0 &&
+                              listasActivas.some((l) => (preciosFiltro[l.id] ?? 0) <= 0);
+
+                            return (
+                              <div className="flex flex-col items-end gap-0.5">
+                                <div className="font-mono font-black text-slate-900 text-xs sm:text-sm">
+                                  {Number(precioPredet) > 0 ? (
+                                    `$${Number(precioPredet).toLocaleString('es-AR', {
+                                      minimumFractionDigits: 2,
+                                    })}`
+                                  ) : (
+                                    <span className="text-slate-400 font-normal italic">Sin precio</span>
+                                  )}
+                                </div>
+                                <span className="text-[10px] text-slate-400 font-medium">
+                                  {listaPredet?.nombre || 'Predeterminada'}
+                                </span>
+                                {listasActivas.length > 1 && (
+                                  <div className="flex items-center justify-end gap-1 flex-wrap mt-0.5 max-w-[170px]">
+                                    {listasActivas
+                                      .filter((l) => l.id !== listaPredet?.id)
+                                      .map((l) => {
+                                        const p = preciosFiltro[l.id] ?? 0;
+                                        const abrev = l.nombre
+                                          .replace(/mayorista/i, 'May.')
+                                          .replace(/comercio/i, 'Com.');
+                                        return (
+                                          <span
+                                            key={l.id}
+                                            title={`${l.nombre}: $${Number(p).toLocaleString('es-AR')}`}
+                                            className={`px-1.5 py-0.5 rounded text-[9px] font-mono font-bold leading-none ${
+                                              p > 0
+                                                ? 'bg-slate-100 text-slate-700'
+                                                : 'bg-amber-100 text-amber-800'
+                                            }`}
+                                          >
+                                            {abrev}: {p > 0 ? `$${Math.round(p)}` : '$0'}
+                                          </span>
+                                        );
+                                      })}
+                                    {tieneCero && (
+                                      <span
+                                        className="text-[9px] font-bold text-amber-700 bg-amber-50 px-1 rounded border border-amber-200"
+                                        title="Contiene al menos una lista con precio $0"
+                                      >
+                                        ⚠️
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </td>
                         <td className="p-3.5 text-center">
                           <button
@@ -746,7 +1019,7 @@ export default function ProductosAdminPage() {
                             className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase transition-all ${
                               esVisible
                                 ? 'bg-green-100 text-green-800 hover:bg-green-200'
-                                : 'bg-slate-150 text-slate-500 hover:bg-slate-200'
+                                : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
                             }`}
                             title="Hacé click para cambiar la visibilidad en el catálogo web público"
                           >
@@ -773,6 +1046,13 @@ export default function ProductosAdminPage() {
                               <button
                                 onClick={() => {
                                   setEditandoFiltroId(f.id);
+                                  setCodigoOriginal(f.codigo_fhl);
+                                  const codUpper = f.codigo_fhl.trim().toUpperCase();
+                                  const preciosActuales: Record<string, number> = {};
+                                  listasActivas.forEach((l) => {
+                                    preciosActuales[l.id] = preciosPorFiltro[codUpper]?.[l.id] ?? 0;
+                                  });
+                                  setPreciosForm(preciosActuales);
                                   setFiltroForm({
                                     codigo_fhl: f.codigo_fhl,
                                     equivalencias: f.equivalencias,
@@ -782,7 +1062,7 @@ export default function ProductosAdminPage() {
                                     activo: f.activo !== false,
                                   });
                                 }}
-                                className="text-blue-600 hover:text-blue-800 p-1 rounded hover:bg-blue-50"
+                                className="text-blue-600 hover:text-blue-800 p-1 rounded hover:bg-blue-50 cursor-pointer"
                                 title="Editar filtro"
                               >
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -836,7 +1116,7 @@ export default function ProductosAdminPage() {
                 <button
                   onClick={() => setPagina((p) => Math.max(1, p - 1))}
                   disabled={pagina === 1}
-                  className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 rounded disabled:opacity-40 font-bold"
+                  className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded disabled:opacity-40 font-bold"
                 >
                   Anterior
                 </button>
@@ -846,7 +1126,7 @@ export default function ProductosAdminPage() {
                 <button
                   onClick={() => setPagina((p) => Math.min(totalPaginas, p + 1))}
                   disabled={pagina === totalPaginas}
-                  className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 rounded disabled:opacity-40 font-bold"
+                  className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded disabled:opacity-40 font-bold"
                 >
                   Siguiente
                 </button>
@@ -882,7 +1162,7 @@ export default function ProductosAdminPage() {
                         placeholder="Ej: FORD"
                         value={vehiculoForm.marca || ''}
                         onChange={(e) => setVehiculoForm({ ...vehiculoForm, marca: e.target.value })}
-                        className="w-full border border-blue-300 rounded px-2 py-1 font-bold text-slate-900 bg-white"
+                        className="w-full border border-blue-300 rounded px-2 py-1 font-bold text-slate-900 bg-white placeholder:text-slate-400"
                       />
                     </td>
                     <td className="p-2.5">
@@ -891,7 +1171,7 @@ export default function ProductosAdminPage() {
                         placeholder="Ej: FOCUS"
                         value={vehiculoForm.modelo || ''}
                         onChange={(e) => setVehiculoForm({ ...vehiculoForm, modelo: e.target.value })}
-                        className="w-full border border-blue-300 rounded px-2 py-1 bg-white"
+                        className="w-full border border-blue-300 rounded px-2 py-1 bg-white text-slate-900 placeholder:text-slate-400"
                       />
                     </td>
                     <td className="p-2.5">
@@ -900,7 +1180,7 @@ export default function ProductosAdminPage() {
                         placeholder="Ej: 2.0 16V"
                         value={vehiculoForm.version || ''}
                         onChange={(e) => setVehiculoForm({ ...vehiculoForm, version: e.target.value })}
-                        className="w-full border border-slate-300 rounded px-2 py-1 bg-white"
+                        className="w-full border border-slate-300 rounded px-2 py-1 bg-white text-slate-900 placeholder:text-slate-400"
                       />
                     </td>
                     <td className="p-2.5">
@@ -909,7 +1189,7 @@ export default function ProductosAdminPage() {
                         placeholder="Ej: 2012 ->"
                         value={vehiculoForm.año || ''}
                         onChange={(e) => setVehiculoForm({ ...vehiculoForm, año: e.target.value })}
-                        className="w-full border border-slate-300 rounded px-2 py-1 bg-white"
+                        className="w-full border border-slate-300 rounded px-2 py-1 bg-white text-slate-900 placeholder:text-slate-400"
                       />
                     </td>
                     <td className="p-2.5">
@@ -918,7 +1198,7 @@ export default function ProductosAdminPage() {
                         placeholder="Ej: FHL-001"
                         value={vehiculoForm.filtro_asociado || ''}
                         onChange={(e) => setVehiculoForm({ ...vehiculoForm, filtro_asociado: e.target.value })}
-                        className="w-full border border-blue-300 rounded px-2 py-1 font-bold text-blue-900 bg-white"
+                        className="w-full border border-blue-300 rounded px-2 py-1 font-bold text-blue-900 bg-white placeholder:text-slate-400"
                       />
                     </td>
                     <td className="p-2.5 text-right space-x-1">
@@ -970,7 +1250,7 @@ export default function ProductosAdminPage() {
                               type="text"
                               value={vehiculoForm.marca || ''}
                               onChange={(e) => setVehiculoForm({ ...vehiculoForm, marca: e.target.value })}
-                              className="w-full border border-blue-300 rounded px-2 py-1 font-bold bg-white"
+                              className="w-full border border-blue-300 rounded px-2 py-1 font-bold bg-white text-slate-900 placeholder:text-slate-400"
                             />
                           </td>
                           <td className="p-2.5">
@@ -978,7 +1258,7 @@ export default function ProductosAdminPage() {
                               type="text"
                               value={vehiculoForm.modelo || ''}
                               onChange={(e) => setVehiculoForm({ ...vehiculoForm, modelo: e.target.value })}
-                              className="w-full border border-slate-300 rounded px-2 py-1 bg-white"
+                              className="w-full border border-slate-300 rounded px-2 py-1 bg-white text-slate-900 placeholder:text-slate-400"
                             />
                           </td>
                           <td className="p-2.5">
@@ -986,7 +1266,7 @@ export default function ProductosAdminPage() {
                               type="text"
                               value={vehiculoForm.version || ''}
                               onChange={(e) => setVehiculoForm({ ...vehiculoForm, version: e.target.value })}
-                              className="w-full border border-slate-300 rounded px-2 py-1 bg-white"
+                              className="w-full border border-slate-300 rounded px-2 py-1 bg-white text-slate-900 placeholder:text-slate-400"
                             />
                           </td>
                           <td className="p-2.5">
@@ -994,7 +1274,7 @@ export default function ProductosAdminPage() {
                               type="text"
                               value={vehiculoForm.año || ''}
                               onChange={(e) => setVehiculoForm({ ...vehiculoForm, año: e.target.value })}
-                              className="w-full border border-slate-300 rounded px-2 py-1 bg-white"
+                              className="w-full border border-slate-300 rounded px-2 py-1 bg-white text-slate-900 placeholder:text-slate-400"
                             />
                           </td>
                           <td className="p-2.5">
@@ -1002,7 +1282,7 @@ export default function ProductosAdminPage() {
                               type="text"
                               value={vehiculoForm.filtro_asociado || ''}
                               onChange={(e) => setVehiculoForm({ ...vehiculoForm, filtro_asociado: e.target.value })}
-                              className="w-full border border-blue-300 rounded px-2 py-1 font-bold text-blue-900 bg-white"
+                              className="w-full border border-blue-300 rounded px-2 py-1 font-bold text-blue-900 bg-white placeholder:text-slate-400"
                             />
                           </td>
                           <td className="p-2.5 text-right space-x-1">
@@ -1112,7 +1392,7 @@ export default function ProductosAdminPage() {
                 <button
                   onClick={() => setPagina((p) => Math.max(1, p - 1))}
                   disabled={pagina === 1}
-                  className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 rounded disabled:opacity-40 font-bold"
+                  className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded disabled:opacity-40 font-bold"
                 >
                   Anterior
                 </button>
@@ -1122,7 +1402,7 @@ export default function ProductosAdminPage() {
                 <button
                   onClick={() => setPagina((p) => Math.min(totalPaginas, p + 1))}
                   disabled={pagina === totalPaginas}
-                  className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 rounded disabled:opacity-40 font-bold"
+                  className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded disabled:opacity-40 font-bold"
                 >
                   Siguiente
                 </button>

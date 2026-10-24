@@ -106,12 +106,20 @@ export default function PedidosAdminPage() {
     if (filtroPago === 'saldados' && (deuda > 0 || p.estado === 'cancelado')) return false;
 
     if (!busqueda) return true;
-    const b = busqueda.toLowerCase().trim();
+    const b = busqueda.toLowerCase().trim().replace(/^#/, '');
     const clienteNombre = p.cliente?.nombre?.toLowerCase() || '';
     const idStr = p.id.toLowerCase();
+    const codigoSecuencial = formatearCodigo(p.numero_secuencial, p.created_at).toLowerCase();
+    const numeroSecStr = p.numero_secuencial ? String(p.numero_secuencial) : '';
     const tieneFiltro = p.items?.some((it) => it.codigo_fhl.toLowerCase().includes(b));
 
-    return clienteNombre.includes(b) || idStr.includes(b) || tieneFiltro;
+    return (
+      clienteNombre.includes(b) ||
+      idStr.includes(b) ||
+      codigoSecuencial.includes(b) ||
+      numeroSecStr.includes(b) ||
+      tieneFiltro
+    );
   });
 
   const totalActivosCount = pedidosActivos.length;
@@ -209,7 +217,7 @@ export default function PedidosAdminPage() {
               aria-pressed={filtroEstado === 'pendiente'}
               className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all cursor-pointer ${
                 filtroEstado === 'pendiente'
-                  ? 'bg-amber-500 text-white shadow-sm'
+                  ? 'bg-amber-600 hover:bg-amber-700 text-white shadow-sm'
                   : 'bg-amber-50 text-amber-800 hover:bg-amber-100'
               }`}
             >
@@ -333,7 +341,7 @@ export default function PedidosAdminPage() {
       <div className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
         {cargando ? (
           <div className="py-20 flex flex-col items-center justify-center gap-3">
-            <div className="h-8 w-8 border-3 border-blue-900 border-t-transparent rounded-full animate-spin" />
+            <div className="h-8 w-8 border-[3px] border-blue-900 border-t-transparent rounded-full animate-spin" />
             <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">
               Cargando pedidos...
             </p>

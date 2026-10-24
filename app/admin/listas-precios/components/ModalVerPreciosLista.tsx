@@ -19,6 +19,7 @@ export default function ModalVerPreciosLista({
   onActualizado,
 }: ModalVerPreciosListaProps) {
   const [items, setItems] = useState<ItemListaPrecio[]>([]);
+  const [catalogoFiltros, setCatalogoFiltros] = useState<{ codigo_fhl: string; descripcion_aplicacion: string | null }[]>([]);
   const [cargando, setCargando] = useState(true);
   const [busqueda, setBusqueda] = useState('');
   
@@ -44,14 +45,25 @@ export default function ModalVerPreciosLista({
   const cargarItems = useCallback(async () => {
     setCargando(true);
     try {
-      const { data, error } = await supabase
-        .from('items_lista_precio')
-        .select('*')
-        .eq('lista_id', lista.id)
-        .order('codigo_fhl', { ascending: true });
+      const [itemsRes, catalogoRes] = await Promise.all([
+        supabase
+          .from('items_lista_precio')
+          .select('*')
+          .eq('lista_id', lista.id)
+          .order('codigo_fhl', { ascending: true })
+          .range(0, 4999),
+        supabase
+          .from('Tabla A')
+          .select('codigo_fhl, descripcion_aplicacion')
+          .or('eliminado.is.null,eliminado.eq.false')
+          .order('codigo_fhl', { ascending: true }),
+      ]);
 
-      if (!error && data) {
-        setItems(data as ItemListaPrecio[]);
+      if (!itemsRes.error && itemsRes.data) {
+        setItems(itemsRes.data as ItemListaPrecio[]);
+      }
+      if (!catalogoRes.error && catalogoRes.data) {
+        setCatalogoFiltros(catalogoRes.data);
       }
     } catch (err) {
       console.error(err);
@@ -81,8 +93,23 @@ export default function ModalVerPreciosLista({
     const val = parseFloat(nuevoPrecio);
     if (!cod || isNaN(val) || val <= 0) return;
 
+    const esMayoristaBase = lista.nombre.toLowerCase().trim().includes('mayorista base');
+
     setGuardandoNuevo(true);
     try {
+      // Si el código no existe en Tabla A, crearlo para garantizar 0 huérfanos
+      const existeEnA = catalogoFiltros.some((f) => f.codigo_fhl.trim().toUpperCase() === cod);
+      if (!existeEnA) {
+        await supabase.from('Tabla A').insert({
+          codigo_fhl: cod,
+          precio: val,
+          activo: false,
+          eliminado: false,
+        });
+      } else if (esMayoristaBase) {
+        await supabase.from('Tabla A').update({ precio: val }).eq('codigo_fhl', cod);
+      }
+
       const { error } = await supabase
         .from('items_lista_precio')
         .upsert(
@@ -111,8 +138,14 @@ export default function ModalVerPreciosLista({
     const val = parseFloat(precioEditado);
     if (isNaN(val) || val <= 0) return;
 
+    const esMayoristaBase = lista.nombre.toLowerCase().trim().includes('mayorista base');
+
     setGuardandoEdit(true);
     try {
+      if (esMayoristaBase) {
+        await supabase.from('Tabla A').update({ precio: val }).eq('codigo_fhl', item.codigo_fhl.trim().toUpperCase());
+      }
+
       const { error } = await supabase
         .from('items_lista_precio')
         .update({ precio: val })
@@ -159,12 +192,24 @@ export default function ModalVerPreciosLista({
 
     setAplicandoAjuste(true);
     try {
-      for (const it of items) {
-        const nuevoPrecioCalculado = aplicarRedondeo(it.precio * factor, tipoRedondeo);
-        await supabase
-          .from('items_lista_precio')
-          .update({ precio: nuevoPrecioCalculado })
-          .eq('id', it.id);
+      const payload = items.map((it) => ({
+        lista_id: lista.id,
+        codigo_fhl: it.codigo_fhl,
+        precio: aplicarRedondeo(it.precio * factor, tipoRedondeo),
+      }));
+
+      // Operación atómica en lote
+      const { error: errUpsert } = await supabase
+        .from('items_lista_precio')
+        .upsert(payload, { onConflict: 'lista_id,codigo_fhl' });
+
+      if (errUpsert) throw errUpsert;
+
+      // Si es Mayorista Base, sincronizar Tabla A.precio
+      if (lista.nombre.toLowerCase().trim().includes('mayorista base')) {
+        for (const it of payload) {
+          await supabase.from('Tabla A').update({ precio: it.precio }).eq('codigo_fhl', it.codigo_fhl.trim().toUpperCase());
+        }
       }
 
       setMostrarAjusteMasivo(false);
@@ -361,11 +406,19 @@ export default function ModalVerPreciosLista({
             <input
               type="text"
               required
+              list="lista-codigos-catalogo"
               placeholder="Ej: FHL-001"
               value={nuevoCodigo}
               onChange={(e) => setNuevoCodigo(e.target.value)}
               className="w-full border border-slate-300 rounded px-2.5 py-1.5 text-xs text-slate-900 bg-white font-bold"
             />
+            <datalist id="lista-codigos-catalogo">
+              {catalogoFiltros.map((f) => (
+                <option key={f.codigo_fhl} value={f.codigo_fhl}>
+                  {f.codigo_fhl} {f.descripcion_aplicacion ? `— ${f.descripcion_aplicacion}` : ''}
+                </option>
+              ))}
+            </datalist>
           </div>
 
           <div className="flex-1 min-w-[120px]">
@@ -399,7 +452,7 @@ export default function ModalVerPreciosLista({
             placeholder="Buscar filtro por código..."
             value={busqueda}
             onChange={(e) => setBusqueda(e.target.value)}
-            className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-md w-full max-w-xs font-bold focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-900"
+            className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-md w-full max-w-xs font-bold text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-900"
           />
           
           <div className="flex items-center gap-3">

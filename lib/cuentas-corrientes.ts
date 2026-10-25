@@ -239,12 +239,19 @@ export function calcularResumenCuentaCliente({
     const t = Number(p.total || 0);
     const fifoInfo = pedidosConEstadoFIFO.find((x) => x.id === p.id);
     const numCod = formatearCodigoLocal(p.numero_secuencial, p.created_at);
+    let subTxt = `Estado: ${p.estado.toUpperCase()}`;
+    if (fifoInfo?.estadoPagoFIFO === 'parcial') {
+      subTxt = `Estado: ${p.estado.toUpperCase()} · Abonado: $${fifoInfo.totalAbonadoFIFO.toLocaleString('es-AR', { minimumFractionDigits: 2 })} · Resta: $${fifoInfo.deudaRestanteFIFO.toLocaleString('es-AR', { minimumFractionDigits: 2 })}`;
+    } else if (fifoInfo?.estadoPagoFIFO === 'impago') {
+      subTxt = `Estado: ${p.estado.toUpperCase()} · Resta: $${fifoInfo.deudaRestanteFIFO.toLocaleString('es-AR', { minimumFractionDigits: 2 })}`;
+    }
+
     extracto.push({
       id: `ped-${p.id}`,
       fecha: p.created_at,
       tipo: 'pedido',
       titulo: `Pedido #${numCod}`,
-      subtitulo: `Estado: ${p.estado.toUpperCase()}`,
+      subtitulo: subTxt,
       debito: t,
       credito: 0,
       montoNeto: -t,
@@ -286,7 +293,7 @@ export function calcularResumenCuentaCliente({
         montoNeto: m,
         saldoAcumulado: 0,
         referenciaId: p.pedido_id,
-        badge: 'PAGADO',
+        badge: 'PAGO',
       });
     } else {
       extracto.push({
@@ -300,7 +307,7 @@ export function calcularResumenCuentaCliente({
         montoNeto: m,
         saldoAcumulado: 0,
         referenciaId: p.pedido_id,
-        badge: 'PAGADO',
+        badge: 'PAGO',
       });
     }
   }
@@ -347,7 +354,7 @@ export function calcularResumenCuentaCliente({
         montoNeto: val,
         saldoAcumulado: 0,
         referenciaId: m.referencia_pedido_id || undefined,
-        badge: 'PAGADO',
+        badge: 'PAGO',
       });
     }
   }

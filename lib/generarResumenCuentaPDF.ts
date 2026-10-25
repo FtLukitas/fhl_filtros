@@ -539,7 +539,7 @@ export async function generarInstanciaResumenCuentaPDF(datos: DatosResumenCuenta
         badgeBg = [220, 252, 231];
         badgeBorder = [187, 247, 208];
         badgeTextCol = [21, 128, 61];
-        badgeStr = 'PAGADO';
+        badgeStr = 'PAGO';
       } else if (tipoLower.includes('anticipo') || m.concepto.toLowerCase().includes('anticipo')) {
         badgeBg = [239, 246, 255];
         badgeBorder = [191, 219, 254];

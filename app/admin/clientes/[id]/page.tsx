@@ -948,32 +948,27 @@ export default function ClienteDetallePage({ params }: PageProps) {
                             )}
                           </td>
                           <td className="p-3">
-                            <div className="flex flex-wrap items-center gap-1.5">
+                            {mov.tipo === 'pedido' ? (
                               <span
-                                className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                                  mov.tipo === 'pago'
-                                    ? 'bg-emerald-100 text-emerald-800'
-                                    : mov.tipo === 'pedido'
-                                    ? 'bg-slate-100 text-slate-800 border border-slate-200'
-                                    : 'bg-blue-100 text-blue-800 border border-blue-200'
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase inline-block ${
+                                  mov.estadoPago === 'saldado'
+                                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                    : mov.estadoPago === 'parcial'
+                                    ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                                    : 'bg-red-50 text-red-700 border border-red-200'
                                 }`}
                               >
-                                {mov.badge || mov.tipo}
+                                {mov.estadoPago ? mov.estadoPago.toUpperCase() : 'IMPAGO'}
                               </span>
-                              {mov.tipo === 'pedido' && mov.estadoPago && (
-                                <span
-                                  className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${
-                                    mov.estadoPago === 'saldado'
-                                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                      : mov.estadoPago === 'parcial'
-                                      ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                                      : 'bg-red-50 text-red-700 border border-red-200'
-                                  }`}
-                                >
-                                  {mov.estadoPago}
-                                </span>
-                              )}
-                            </div>
+                            ) : mov.tipo === 'pago' ? (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase inline-block bg-emerald-100 text-emerald-800">
+                                {mov.badge || 'PAGO'}
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase inline-block bg-blue-100 text-blue-800 border border-blue-200">
+                                {mov.badge || 'SALDO ANT.'}
+                              </span>
+                            )}
                           </td>
                           <td className="p-3 text-right font-mono font-bold text-red-600">
                             {mov.debito > 0 ? `-$${mov.debito.toLocaleString('es-AR', { minimumFractionDigits: 2 })}` : '—'}

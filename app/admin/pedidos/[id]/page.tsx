@@ -19,6 +19,7 @@ export default function PedidoDetallePage({ params }: PageProps) {
 
   const [pedido, setPedido] = useState<Pedido | null>(null);
   const [pagos, setPagos] = useState<Pago[]>([]);
+  const [fifoPedido, setFifoPedido] = useState<{ totalAbonadoFIFO: number; deudaRestanteFIFO: number; estadoPagoFIFO: EstadoPagoPedido } | null>(null);
   const [saldoCliente, setSaldoCliente] = useState<number>(0);
   const [cargando, setCargando] = useState(true);
   const [descargandoPDF, setDescargandoPDF] = useState(false);
@@ -61,19 +62,26 @@ export default function PedidoDetallePage({ params }: PageProps) {
         .order('fecha', { ascending: false });
       setPagos((dbPagos as Pago[]) || []);
 
-      // 3. Cargar saldo a favor disponible real del cliente (excluyendo el pedido actual)
+      // 3. Cargar cuenta corriente unificada del cliente y cálculo FIFO de este pedido
       if (dbPedido.cliente_id) {
         try {
-          const estado = await obtenerEstadoCuentaCliente(dbPedido.cliente_id, null, pedidoId);
-          setSaldoCliente(estado.saldoNeto > 0 ? estado.saldoNeto : 0);
-        } catch {
-          const { data: dbSaldo } = await supabase
-            .from('movimientos_saldo')
-            .select('monto')
-            .eq('cliente_id', dbPedido.cliente_id);
+          const [resPeds, resPags, resMovs] = await Promise.all([
+            supabase.from('pedidos').select('*').eq('cliente_id', dbPedido.cliente_id),
+            supabase.from('pagos').select('*').eq('cliente_id', dbPedido.cliente_id),
+            supabase.from('movimientos_saldo').select('*').eq('cliente_id', dbPedido.cliente_id),
+          ]);
 
-          const totalSaldo = (dbSaldo || []).reduce((acc: number, cur: any) => acc + Number(cur.monto || 0), 0);
-          setSaldoCliente(Math.max(0, totalSaldo));
+          const resumen = calcularResumenCuentaCliente({
+            pedidos: (resPeds.data as any) || [],
+            pagos: (resPags.data as any) || [],
+            movimientosSaldo: (resMovs.data as any) || [],
+          });
+
+          const infoFIFO = resumen.pedidosConEstadoFIFO.find((x) => x.id === pedidoId);
+          setFifoPedido(infoFIFO || null);
+          setSaldoCliente(resumen.saldoAFavor);
+        } catch (e) {
+          console.error('Error al calcular resumen de cuenta FIFO en pedido:', e);
         }
       }
     } catch (err) {
@@ -180,16 +188,33 @@ export default function PedidoDetallePage({ params }: PageProps) {
   };
 
   // Cálculos financieros
-  const totalPagado = pagos.reduce((sum, p) => sum + Number(p.monto || 0), 0);
+  const pagosDirectos = pagos.reduce((sum, p) => sum + Number(p.monto || 0), 0);
   const totalPedido = Number(pedido?.total || 0);
-  const deudaRestante = Math.max(0, totalPedido - totalPagado);
-  
-  const estadoPago: EstadoPagoPedido =
-    deudaRestante === 0 && totalPedido > 0
-      ? 'saldado'
-      : totalPagado > 0
-      ? 'parcial'
-      : 'impago';
+
+  const esCanceladoOEliminado = pedido?.estado === 'cancelado' || Boolean(pedido?.eliminado);
+  const totalPagado = esCanceladoOEliminado
+    ? 0
+    : fifoPedido
+    ? fifoPedido.totalAbonadoFIFO
+    : pagosDirectos;
+
+  const deudaRestante = esCanceladoOEliminado
+    ? 0
+    : fifoPedido
+    ? fifoPedido.deudaRestanteFIFO
+    : Math.max(0, totalPedido - pagosDirectos);
+
+  const estadoPago: EstadoPagoPedido = esCanceladoOEliminado
+    ? 'impago'
+    : fifoPedido
+    ? fifoPedido.estadoPagoFIFO
+    : deudaRestante <= 0.01 && totalPedido > 0
+    ? 'saldado'
+    : totalPagado > 0
+    ? 'parcial'
+    : 'impago';
+
+  const acreditadoPorFIFO = Math.round(Math.max(0, totalPagado - pagosDirectos) * 100) / 100;
 
   // Registrar un pago
   const handleRegistrarPago = async (e: React.FormEvent) => {
@@ -903,15 +928,42 @@ export default function PedidoDetallePage({ params }: PageProps) {
           {/* Historial de Pagos de este pedido */}
           <div className="bg-white rounded-lg p-5 border border-slate-200 shadow-sm space-y-3">
             <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-              Historial de Pagos ({pagos.length})
+              Historial de Pagos ({pagos.length + (acreditadoPorFIFO > 0 ? 1 : 0)})
             </h3>
 
-            {pagos.length === 0 ? (
+            {pagos.length === 0 && acreditadoPorFIFO <= 0 ? (
               <p className="text-xs text-slate-400 italic py-3 text-center">
                 Aún no se registraron pagos para este pedido.
               </p>
             ) : (
               <div className="space-y-2">
+                {/* Ítem informativo de acreditación por cuenta corriente FIFO */}
+                {acreditadoPorFIFO > 0 && (
+                  <div className="p-3 bg-amber-50/80 rounded-md border border-amber-200 text-xs flex items-center justify-between gap-2">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-emerald-700 font-mono text-sm">
+                          +${acreditadoPorFIFO.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+                        </span>
+                        <span className="font-bold px-1.5 py-0.5 rounded text-[10px] uppercase bg-amber-100 text-amber-800 border border-amber-300">
+                          Imputación FIFO (Cuenta Corriente)
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-slate-600 block mt-0.5">
+                        Acreditado automáticamente de pagos/transferencias en cuenta corriente del cliente
+                      </span>
+                    </div>
+                    {pedido?.cliente_id && (
+                      <Link
+                        href={`/admin/clientes/${pedido.cliente_id}`}
+                        className="text-[11px] font-bold text-blue-900 hover:underline shrink-0"
+                      >
+                        Ver Cuenta →
+                      </Link>
+                    )}
+                  </div>
+                )}
+
                 {pagos.map((p) => (
                   <div
                     key={p.id}

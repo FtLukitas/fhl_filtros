@@ -5,7 +5,8 @@ import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { generarPDF } from '@/lib/generarPDF';
 import { formatearCodigo } from '@/lib/codigos';
-import type { Pedido, Cliente, Presupuesto } from '@/lib/types';
+import { calcularResumenCuentaCliente } from '@/lib/cuentas-corrientes';
+import type { Pedido, Cliente, Presupuesto, Pago, MovimientoSaldo } from '@/lib/types';
 
 export default function AdminDashboardPage() {
   const [cargando, setCargando] = useState(true);
@@ -68,30 +69,6 @@ export default function AdminDashboardPage() {
         .select('*', { count: 'exact', head: true })
         .or('eliminado.is.null,eliminado.eq.false');
 
-      // Pagos mapeados
-      const pagosPorPedido = new Map<string, number>();
-      pagos.forEach((p: any) => {
-        pagosPorPedido.set(p.pedido_id, (pagosPorPedido.get(p.pedido_id) || 0) + Number(p.monto || 0));
-      });
-
-      // Saldo por cliente desde movimientos_saldo
-      const saldoMovsPorCliente = new Map<string, number>();
-      saldoMovs.forEach((s: any) => {
-        saldoMovsPorCliente.set(s.cliente_id, (saldoMovsPorCliente.get(s.cliente_id) || 0) + Number(s.monto || 0));
-      });
-
-      // Deuda por pedidos no saldados
-      const deudaPedidosPorCliente = new Map<string, number>();
-      pedidos
-        .filter((p) => p.estado !== 'cancelado')
-        .forEach((p) => {
-          const pagado = pagosPorPedido.get(p.id) || 0;
-          const deuda = Math.max(0, Number(p.total || 0) - pagado);
-          if (deuda > 0) {
-            deudaPedidosPorCliente.set(p.cliente_id, (deudaPedidosPorCliente.get(p.cliente_id) || 0) + deuda);
-          }
-        });
-
       // Facturación del mes actual
       const ahora = new Date();
       const mesActual = ahora.getMonth();
@@ -105,22 +82,28 @@ export default function AdminDashboardPage() {
         })
         .reduce((sum, p) => sum + Number(p.total || 0), 0);
 
-      // Calcular Saldo Neto Unificado por cliente
+      // Calcular Saldo Neto Unificado por cliente mediante motor central FIFO
       let montoTotalDeuda = 0;
       let saldoTotalAFavor = 0;
       const rankingDeuda: { cliente: Cliente; deuda: number }[] = [];
 
       clientes.forEach((c) => {
-        const balanceMovs = saldoMovsPorCliente.get(c.id) || 0;
-        const deudaPed = deudaPedidosPorCliente.get(c.id) || 0;
-        const saldoNeto = balanceMovs - deudaPed;
+        const pedsCli = (pedidos as Pedido[]).filter((p) => p.cliente_id === c.id);
+        const pagosCli = (pagos as Pago[]).filter((p) => p.cliente_id === c.id);
+        const movsCli = (saldoMovs as MovimientoSaldo[]).filter((m) => m.cliente_id === c.id);
 
-        if (saldoNeto < 0) {
-          const deuda = Math.abs(saldoNeto);
+        const res = calcularResumenCuentaCliente({
+          pedidos: pedsCli,
+          pagos: pagosCli,
+          movimientosSaldo: movsCli,
+        });
+
+        if (res.saldoNeto < 0) {
+          const deuda = res.deudaTotal;
           montoTotalDeuda += deuda;
           rankingDeuda.push({ cliente: c, deuda });
-        } else if (saldoNeto > 0) {
-          saldoTotalAFavor += saldoNeto;
+        } else if (res.saldoNeto > 0) {
+          saldoTotalAFavor += res.saldoAFavor;
         }
       });
 

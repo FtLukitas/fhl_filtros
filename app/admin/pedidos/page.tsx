@@ -4,11 +4,12 @@ import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { formatearCodigo } from '@/lib/codigos';
-import type { Pedido, EstadoPedido } from '@/lib/types';
+import { calcularResumenCuentaCliente } from '@/lib/cuentas-corrientes';
+import type { Pedido, EstadoPedido, Pago, MovimientoSaldo, EstadoPagoPedido } from '@/lib/types';
 
 export default function PedidosAdminPage() {
   const [pedidos, setPedidos] = useState<Pedido[]>([]);
-  const [pagosMap, setPagosMap] = useState<Map<string, number>>(new Map());
+  const [fifoPorPedidoMap, setFifoPorPedidoMap] = useState<Map<string, { pagado: number; deuda: number; estadoPago: EstadoPagoPedido }>>(new Map());
   const [cargando, setCargando] = useState(true);
   const [busqueda, setBusqueda] = useState('');
   const [filtroEstado, setFiltroEstado] = useState<EstadoPedido | 'todos'>('todos');
@@ -18,23 +19,47 @@ export default function PedidosAdminPage() {
   const cargarPedidos = useCallback(async () => {
     setCargando(true);
     try {
-      const { data: dbPedidos, error: errPed } = await supabase
-        .from('pedidos')
-        .select('*, cliente:clientes(*), items:items_pedido(*)')
-        .order('created_at', { ascending: false });
+      const [resPeds, resPagos, resMovs] = await Promise.all([
+        supabase
+          .from('pedidos')
+          .select('*, cliente:clientes(*), items:items_pedido(*)')
+          .order('created_at', { ascending: false }),
+        supabase.from('pagos').select('*'),
+        supabase.from('movimientos_saldo').select('*'),
+      ]);
 
-      if (errPed) throw errPed;
-      setPedidos((dbPedidos as Pedido[]) || []);
+      if (resPeds.error) throw resPeds.error;
+      const todosPeds = (resPeds.data as Pedido[]) || [];
+      const todosPagos = (resPagos.data as Pago[]) || [];
+      const todosMovs = (resMovs.data as MovimientoSaldo[]) || [];
 
-      // Cargar pagos agrupados
-      const { data: dbPagos } = await supabase.from('pagos').select('pedido_id, monto');
-      const mapa = new Map<string, number>();
-      if (dbPagos) {
-        dbPagos.forEach((p: any) => {
-          mapa.set(p.pedido_id, (mapa.get(p.pedido_id) || 0) + Number(p.monto || 0));
+      setPedidos(todosPeds);
+
+      // Calcular estado FIFO para cada cliente
+      const clientesIds = new Set(todosPeds.map((p) => p.cliente_id).filter(Boolean));
+      const mapaFIFO = new Map<string, { pagado: number; deuda: number; estadoPago: EstadoPagoPedido }>();
+
+      for (const cid of clientesIds) {
+        const pedsCli = todosPeds.filter((p) => p.cliente_id === cid);
+        const pagosCli = todosPagos.filter((p) => p.cliente_id === cid);
+        const movsCli = todosMovs.filter((m) => m.cliente_id === cid);
+
+        const resumen = calcularResumenCuentaCliente({
+          pedidos: pedsCli,
+          pagos: pagosCli,
+          movimientosSaldo: movsCli,
         });
+
+        for (const pFIFO of resumen.pedidosConEstadoFIFO) {
+          mapaFIFO.set(pFIFO.id, {
+            pagado: pFIFO.totalAbonadoFIFO,
+            deuda: pFIFO.deudaRestanteFIFO,
+            estadoPago: pFIFO.estadoPagoFIFO,
+          });
+        }
       }
-      setPagosMap(mapa);
+
+      setFifoPorPedidoMap(mapaFIFO);
     } catch (err) {
       console.error('Error al cargar pedidos:', err);
     } finally {
@@ -86,24 +111,34 @@ export default function PedidosAdminPage() {
 
   const totalCobradoActivo = pedidosActivos
     .filter((p) => p.estado !== 'cancelado')
-    .reduce((sum, p) => sum + (pagosMap.get(p.id) || 0), 0);
+    .reduce((sum, p) => {
+      const info = fifoPorPedidoMap.get(p.id);
+      return sum + (info ? info.pagado : 0);
+    }, 0);
 
-  const totalDeudaActiva = Math.max(0, totalFacturadoActivo - totalCobradoActivo);
+  const totalDeudaActiva = pedidosActivos
+    .filter((p) => p.estado !== 'cancelado')
+    .reduce((sum, p) => {
+      const info = fifoPorPedidoMap.get(p.id);
+      return sum + (info ? info.deuda : Number(p.total || 0));
+    }, 0);
 
   // Filtrado
   const pedidosFiltrados = pedidos.filter((p) => {
     // Papelera
     if (verEliminados ? !p.eliminado : p.eliminado) return false;
 
-    const pagado = pagosMap.get(p.id) || 0;
-    const deuda = Math.max(0, Number(p.total || 0) - pagado);
+    const info = fifoPorPedidoMap.get(p.id);
+    const pagado = info ? info.pagado : 0;
+    const deuda = p.estado === 'cancelado' ? 0 : (info ? info.deuda : Number(p.total || 0));
+    const estadoPago = p.estado === 'cancelado' ? 'impago' : (info ? info.estadoPago : (deuda <= 0.01 && Number(p.total || 0) > 0 ? 'saldado' : pagado > 0 ? 'parcial' : 'impago'));
 
     // Filtro logístico
     if (filtroEstado !== 'todos' && p.estado !== filtroEstado) return false;
 
     // Filtro de pago
-    if (filtroPago === 'con_deuda' && (deuda <= 0 || p.estado === 'cancelado')) return false;
-    if (filtroPago === 'saldados' && (deuda > 0 || p.estado === 'cancelado')) return false;
+    if (filtroPago === 'con_deuda' && (deuda <= 0.01 || p.estado === 'cancelado')) return false;
+    if (filtroPago === 'saldados' && (deuda > 0.01 || p.estado === 'cancelado')) return false;
 
     if (!busqueda) return true;
     const b = busqueda.toLowerCase().trim().replace(/^#/, '');
@@ -188,7 +223,7 @@ export default function PedidosAdminPage() {
               ${totalDeudaActiva.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
             </span>
             <span className="text-[11px] text-red-600/80 mt-0.5 block">
-              {pedidosActivos.filter(p => (Number(p.total || 0) - (pagosMap.get(p.id) || 0)) > 0 && p.estado !== 'cancelado').length} pedidos con saldo pendiente
+              {pedidosActivos.filter(p => ((fifoPorPedidoMap.get(p.id)?.deuda ?? Number(p.total || 0)) > 0.01) && p.estado !== 'cancelado').length} pedidos con saldo pendiente
             </span>
           </div>
         </div>
@@ -375,9 +410,10 @@ export default function PedidosAdminPage() {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {pedidosFiltrados.map((p) => {
-                  const pagado = pagosMap.get(p.id) || 0;
-                  const deuda = Math.max(0, Number(p.total || 0) - pagado);
-                  const estadoPago = deuda === 0 && Number(p.total || 0) > 0 ? 'saldado' : pagado > 0 ? 'parcial' : 'impago';
+                  const info = fifoPorPedidoMap.get(p.id);
+                  const pagado = info ? info.pagado : 0;
+                  const deuda = p.estado === 'cancelado' ? 0 : (info ? info.deuda : Number(p.total || 0));
+                  const estadoPago = p.estado === 'cancelado' ? 'impago' : (info ? info.estadoPago : (deuda <= 0.01 && Number(p.total || 0) > 0 ? 'saldado' : pagado > 0 ? 'parcial' : 'impago'));
 
                   return (
                     <tr key={p.id} className="hover:bg-slate-50 transition-colors">

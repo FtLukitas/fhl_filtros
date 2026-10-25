@@ -946,7 +946,7 @@ export default function PedidoDetallePage({ params }: PageProps) {
                           +${acreditadoPorFIFO.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
                         </span>
                         <span className="font-bold px-1.5 py-0.5 rounded text-[10px] uppercase bg-amber-100 text-amber-800 border border-amber-300">
-                          Imputación FIFO (Cuenta Corriente)
+                          Imputación por pago anterior
                         </span>
                       </div>
                       <span className="text-[11px] text-slate-600 block mt-0.5">

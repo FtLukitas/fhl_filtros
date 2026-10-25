@@ -3,7 +3,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
-import type { Cliente, ListaPrecio, ResumenFinancieroCliente } from '@/lib/types';
+import { calcularResumenCuentaCliente } from '@/lib/cuentas-corrientes';
+import type { Cliente, ListaPrecio, ResumenFinancieroCliente, Pedido, Pago, MovimientoSaldo } from '@/lib/types';
 import ModalAjusteSaldo from './components/ModalAjusteSaldo';
 
 export default function ClientesAdminPage() {
@@ -77,71 +78,43 @@ export default function ClientesAdminPage() {
       const listaClientes = (dbClientes as Cliente[]) || [];
       setClientes(listaClientes);
 
-      // 2. Cargar pedidos no cancelados ni en papelera para calcular compras y deudas
+      // 2. Cargar pedidos
       const { data: dbPedidos } = await supabase
         .from('pedidos')
-        .select('id, cliente_id, total, estado, eliminado')
-        .neq('estado', 'cancelado')
-        .or('eliminado.is.null,eliminado.eq.false');
+        .select('*');
 
       // 3. Cargar pagos
-      const { data: dbPagos } = await supabase.from('pagos').select('pedido_id, cliente_id, monto');
+      const { data: dbPagos } = await supabase.from('pagos').select('*');
 
       // 4. Cargar movimientos de saldo
-      const { data: dbSaldo } = await supabase.from('movimientos_saldo').select('cliente_id, monto');
+      const { data: dbSaldo } = await supabase.from('movimientos_saldo').select('*');
 
-      // Calcular mapa de pagos por pedido
-      const pagosPorPedido = new Map<string, number>();
-      if (dbPagos) {
-        dbPagos.forEach((p: any) => {
-          pagosPorPedido.set(p.pedido_id, (pagosPorPedido.get(p.pedido_id) || 0) + Number(p.monto || 0));
-        });
-      }
+      const todosPedidos = (dbPedidos as Pedido[]) || [];
+      const todosPagos = (dbPagos as Pago[]) || [];
+      const todosMovs = (dbSaldo as MovimientoSaldo[]) || [];
 
-      // Calcular mapa de saldos por cliente
-      const saldoPorCliente = new Map<string, number>();
-      if (dbSaldo) {
-        dbSaldo.forEach((s: any) => {
-          saldoPorCliente.set(s.cliente_id, (saldoPorCliente.get(s.cliente_id) || 0) + Number(s.monto || 0));
-        });
-      }
-
-      // Construir mapa de resumenes financieros por cliente
+      // Construir mapa de resumenes financieros usando el motor central FIFO
       const mapaResumen: Record<string, ResumenFinancieroCliente> = {};
 
       listaClientes.forEach((c) => {
-        let totalComprado = 0;
-        let totalDeudaPedidos = 0;
-        let pedidosPendientes = 0;
+        const pedsCliente = todosPedidos.filter((p) => p.cliente_id === c.id);
+        const pagosCliente = todosPagos.filter((p) => p.cliente_id === c.id);
+        const movsCliente = todosMovs.filter((m) => m.cliente_id === c.id);
 
-        if (dbPedidos) {
-          dbPedidos
-            .filter((p: any) => p.cliente_id === c.id && !p.eliminado)
-            .forEach((p: any) => {
-              const totalP = Number(p.total || 0);
-              const pagadoP = pagosPorPedido.get(p.id) || 0;
-              const deudaP = Math.max(0, totalP - pagadoP);
-
-              totalComprado += totalP;
-              totalDeudaPedidos += deudaP;
-              if (p.estado === 'pendiente') pedidosPendientes++;
-            });
-        }
-
-        const balanceSaldo = saldoPorCliente.get(c.id) || 0;
-        // Saldo neto unificado: balanceSaldo (+) menos deudas de pedidos (-)
-        const saldoNeto = balanceSaldo - totalDeudaPedidos;
-        const saldoAFavor = saldoNeto > 0 ? saldoNeto : 0;
-        const totalDeuda = saldoNeto < 0 ? Math.abs(saldoNeto) : 0;
+        const res = calcularResumenCuentaCliente({
+          pedidos: pedsCliente,
+          pagos: pagosCliente,
+          movimientosSaldo: movsCliente,
+        });
 
         mapaResumen[c.id] = {
-          totalComprado,
-          totalPagado: totalComprado - totalDeudaPedidos,
-          totalDeuda,
-          totalSaldoAFavor: saldoAFavor,
-          saldoNeto,
-          pedidosPendientes,
-          pedidosImpagos: totalDeuda > 0 ? 1 : 0,
+          totalComprado: res.totalComprado,
+          totalPagado: res.totalPagado,
+          totalDeuda: res.deudaTotal,
+          totalSaldoAFavor: res.saldoAFavor,
+          saldoNeto: res.saldoNeto,
+          pedidosPendientes: res.pedidosPendientesCount,
+          pedidosImpagos: res.pedidosImpagosCount,
         };
       });
 

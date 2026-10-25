@@ -42,6 +42,8 @@ export interface DatosResumenCuentaPDF {
   saldoNeto: number; // Positivo = Saldo a Favor, Negativo = Deuda
   totalComprado: number;
   totalPagado: number;
+  deudaAnteriorTotal?: number;
+  deudaAnteriorPendiente?: number;
   pedidos: ItemPedidoResumen[];
   movimientos: ItemMovimientoResumen[];
   fechaEmision?: Date | string;
@@ -287,7 +289,11 @@ export async function generarInstanciaResumenCuentaPDF(datos: DatosResumenCuenta
   doc.setFontSize(6.5);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(...GRIS_MEDIO);
-  doc.text(`${datos.pedidos.length} pedido(s) realizados`, M + wCard1 + 5, yKPI + 15.5);
+  const subtextoCard2 =
+    datos.deudaAnteriorTotal && datos.deudaAnteriorTotal > 0
+      ? `${datos.pedidos.length} pedido(s) + ${formatearMoneda(datos.deudaAnteriorTotal)} saldo ant.`
+      : `${datos.pedidos.length} pedido(s) realizados`;
+  doc.text(subtextoCard2, M + wCard1 + 5, yKPI + 15.5);
 
   // Card 3: Total Pagado
   doc.setFillColor(...GRIS_BG);
@@ -315,9 +321,10 @@ export async function generarInstanciaResumenCuentaPDF(datos: DatosResumenCuenta
   // BANNER INFORMATIVO DE SITUACIÓN
   // =========================================================================
   const pedidosPendientes = datos.pedidos.filter((p) => p.deuda > 0);
+  const tieneDeudaAnterior = Boolean(datos.deudaAnteriorPendiente && datos.deudaAnteriorPendiente > 0);
 
-  if (pedidosPendientes.length > 0) {
-    // Banner de advertencia si tiene pedidos pendientes
+  if (pedidosPendientes.length > 0 || tieneDeudaAnterior) {
+    // Banner de advertencia si tiene pedidos pendientes o saldo anterior
     doc.setFillColor(...ROJO_BG);
     doc.setDrawColor(252, 165, 165);
     doc.setLineWidth(0.3);
@@ -326,13 +333,19 @@ export async function generarInstanciaResumenCuentaPDF(datos: DatosResumenCuenta
     doc.setTextColor(...ROJO_TEXTO);
     doc.setFontSize(7.5);
     doc.setFont('helvetica', 'bold');
-    doc.text(`ATENCION: Registra ${pedidosPendientes.length} pedido(s) con saldo pendiente de pago.`, M + 4, curY + 4);
+    const totalCargosPendientes = pedidosPendientes.length + (tieneDeudaAnterior ? 1 : 0);
+    doc.text(`ATENCION: Registra ${totalCargosPendientes} cargo(s) con saldo pendiente de pago.`, M + 4, curY + 4);
 
     doc.setFontSize(6.5);
     doc.setFont('helvetica', 'normal');
-    const detallePend = pedidosPendientes
-      .map((p) => `Pedido #${p.numeroSecuencial || p.id.slice(0, 4)}: resta ${formatearMoneda(p.deuda)}`)
-      .join('  -  ');
+    const itemsPend: string[] = [];
+    if (tieneDeudaAnterior) {
+      itemsPend.push(`Saldo anterior: resta ${formatearMoneda(datos.deudaAnteriorPendiente!)}`);
+    }
+    pedidosPendientes.forEach((p) => {
+      itemsPend.push(`Pedido #${p.numeroSecuencial || p.id.slice(0, 4)}: resta ${formatearMoneda(p.deuda)}`);
+    });
+    const detallePend = itemsPend.join('  -  ');
     doc.text(sanitizarTextoPDF(detallePend), M + 4, curY + 7);
     curY += 12;
   } else if (esAFavor) {
@@ -532,6 +545,11 @@ export async function generarInstanciaResumenCuentaPDF(datos: DatosResumenCuenta
         badgeBorder = [191, 219, 254];
         badgeTextCol = [30, 58, 138];
         badgeStr = 'ANTICIPO';
+      } else {
+        badgeBg = [241, 245, 249];
+        badgeBorder = [203, 213, 225];
+        badgeTextCol = [71, 85, 105];
+        badgeStr = m.concepto.toLowerCase().includes('saldo') ? 'SALDO ANT.' : 'AJUSTE';
       }
 
       doc.setFillColor(...badgeBg);

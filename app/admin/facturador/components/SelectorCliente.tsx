@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../../../../lib/supabase';
+import { calcularResumenCuentaCliente } from '../../../../lib/cuentas-corrientes';
 import type { Cliente, ListaPrecio } from '../../../../lib/types';
 
 interface SelectorClienteProps {
@@ -54,28 +55,18 @@ export default function SelectorCliente({ clienteSeleccionado, onSeleccionar }: 
       if (!clienteSeleccionado) return;
       try {
         const [resPed, resPag, resMov] = await Promise.all([
-          supabase
-            .from('pedidos')
-            .select('id, total')
-            .eq('cliente_id', clienteSeleccionado.id)
-            .neq('estado', 'cancelado')
-            .or('eliminado.is.null,eliminado.eq.false'),
-          supabase.from('pagos').select('pedido_id, monto').eq('cliente_id', clienteSeleccionado.id),
-          supabase.from('movimientos_saldo').select('monto').eq('cliente_id', clienteSeleccionado.id),
+          supabase.from('pedidos').select('*').eq('cliente_id', clienteSeleccionado.id),
+          supabase.from('pagos').select('*').eq('cliente_id', clienteSeleccionado.id),
+          supabase.from('movimientos_saldo').select('*').eq('cliente_id', clienteSeleccionado.id),
         ]);
 
-        const pagosPorPedido = new Map<string, number>();
-        (resPag.data || []).forEach((p: any) => {
-          pagosPorPedido.set(p.pedido_id, (pagosPorPedido.get(p.pedido_id) || 0) + Number(p.monto || 0));
+        const resumen = calcularResumenCuentaCliente({
+          pedidos: (resPed.data as any) || [],
+          pagos: (resPag.data as any) || [],
+          movimientosSaldo: (resMov.data as any) || [],
         });
 
-        const deudaPed = (resPed.data || []).reduce((sum: number, p: any) => {
-          const pagado = pagosPorPedido.get(p.id) || 0;
-          return sum + Math.max(0, Number(p.total || 0) - pagado);
-        }, 0);
-
-        const balMov = (resMov.data || []).reduce((sum: number, m: any) => sum + Number(m.monto || 0), 0);
-        setSaldoNetoCliente(balMov - deudaPed);
+        setSaldoNetoCliente(resumen.saldoNeto);
       } catch (e) {
         console.error('Error al cargar saldo del cliente:', e);
       }

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { generarPDF, obtenerEstadoCuentaCliente } from '@/lib/generarPDF';
+import { calcularResumenCuentaCliente } from '@/lib/cuentas-corrientes';
 import { formatearCodigo } from '@/lib/codigos';
 import type { Pedido, Pago, MetodoPago, EstadoPedido, EstadoPagoPedido } from '@/lib/types';
 
@@ -210,20 +211,19 @@ export default function PedidoDetallePage({ params }: PageProps) {
     setErrorPago(null);
 
     try {
-      // 1. Insertar el pago
-      const { error: errPago } = await supabase.from('pagos').insert({
-        pedido_id: pedido.id,
-        cliente_id: pedido.cliente_id,
-        monto: montoNum,
-        metodo: metodoPago,
-        nota: notaPago.trim() || (metodoPago === 'saldo_a_favor' ? 'Pago con Saldo a Favor' : null),
-        fecha: new Date().toISOString(),
-      });
-
-      if (errPago) throw errPago;
-
-      // 2. Si el método es saldo a favor, descontar del libro mayor de saldo
       if (metodoPago === 'saldo_a_favor') {
+        // 1. Insertar el pago con saldo a favor
+        const { error: errPago } = await supabase.from('pagos').insert({
+          pedido_id: pedido.id,
+          cliente_id: pedido.cliente_id,
+          monto: montoNum,
+          metodo: 'saldo_a_favor',
+          nota: notaPago.trim() || 'Pago con Saldo a Favor',
+          fecha: new Date().toISOString(),
+        });
+        if (errPago) throw errPago;
+
+        // 2. Descontar del libro mayor de saldo
         await supabase.from('movimientos_saldo').insert({
           cliente_id: pedido.cliente_id,
           monto: -montoNum,
@@ -232,18 +232,94 @@ export default function PedidoDetallePage({ params }: PageProps) {
           nota: `Aplicado al pedido #${formatearCodigo(pedido.numero_secuencial, pedido.created_at)}`,
           fecha: new Date().toISOString(),
         });
-      }
-      // 3. Si el pago con otro método supera la deuda, acreditar excedente como saldo a favor
-      else if (montoNum > deudaRestante && deudaRestante > 0) {
-        const excedente = montoNum - deudaRestante;
-        await supabase.from('movimientos_saldo').insert({
-          cliente_id: pedido.cliente_id,
-          monto: excedente,
-          tipo: 'excedente',
-          referencia_pedido_id: pedido.id,
-          nota: `Excedente de pago en pedido #${formatearCodigo(pedido.numero_secuencial, pedido.created_at)}`,
-          fecha: new Date().toISOString(),
-        });
+      } else {
+        // Pago con método externo (efectivo, transferencia, cheque, etc.)
+        if (montoNum <= deudaRestante) {
+          // Si el monto cubre parte o el total de este pedido: insertar normalmente
+          const { error: errPago } = await supabase.from('pagos').insert({
+            pedido_id: pedido.id,
+            cliente_id: pedido.cliente_id,
+            monto: montoNum,
+            metodo: metodoPago,
+            nota: notaPago.trim() || null,
+            fecha: new Date().toISOString(),
+          });
+          if (errPago) throw errPago;
+        } else {
+          // El monto supera la deuda de este pedido:
+          // 1. Imputar a este pedido lo que debía (si debía > 0)
+          const montoEstePedido = Math.max(0, deudaRestante);
+          if (montoEstePedido > 0) {
+            const { error: errPago } = await supabase.from('pagos').insert({
+              pedido_id: pedido.id,
+              cliente_id: pedido.cliente_id,
+              monto: montoEstePedido,
+              metodo: metodoPago,
+              nota: notaPago.trim() || null,
+              fecha: new Date().toISOString(),
+            });
+            if (errPago) throw errPago;
+          }
+
+          let remanente = Math.round((montoNum - montoEstePedido) * 100) / 100;
+
+          // 2. Cargar estado de la cuenta del cliente para imputar sobrante en orden FIFO
+          const [resPeds, resPags, resMovs] = await Promise.all([
+            supabase.from('pedidos').select('*').eq('cliente_id', pedido.cliente_id),
+            supabase.from('pagos').select('*').eq('cliente_id', pedido.cliente_id),
+            supabase.from('movimientos_saldo').select('*').eq('cliente_id', pedido.cliente_id),
+          ]);
+
+          const resumenCliente = calcularResumenCuentaCliente({
+            pedidos: (resPeds.data as any) || [],
+            pagos: (resPags.data as any) || [],
+            movimientosSaldo: (resMovs.data as any) || [],
+          });
+
+          // A. Absorber deuda anterior pendiente (si existía)
+          if (resumenCliente.deudaAnteriorRestante > 0 && remanente > 0) {
+            const aCubrirAnt = Math.min(remanente, resumenCliente.deudaAnteriorRestante);
+            await supabase.from('movimientos_saldo').insert({
+              cliente_id: pedido.cliente_id,
+              monto: aCubrirAnt,
+              tipo: 'anticipo',
+              nota: `Cobranza imputada a deuda anterior (del pago de $${montoNum.toLocaleString('es-AR')})`,
+              fecha: new Date().toISOString(),
+            });
+            remanente = Math.round((remanente - aCubrirAnt) * 100) / 100;
+          }
+
+          // B. Imputar a otros pedidos pendientes en orden cronológico FIFO
+          const otrosPendientes = resumenCliente.pedidosConEstadoFIFO.filter(
+            (p) => p.id !== pedido.id && p.deudaRestanteFIFO > 0
+          );
+
+          for (const otroPed of otrosPendientes) {
+            if (remanente <= 0) break;
+            const aCubrir = Math.min(remanente, otroPed.deudaRestanteFIFO);
+            await supabase.from('pagos').insert({
+              pedido_id: otroPed.id,
+              cliente_id: pedido.cliente_id,
+              monto: aCubrir,
+              metodo: metodoPago,
+              nota: `Imputado del pago de $${montoNum.toLocaleString('es-AR')} en pedido #${formatearCodigo(pedido.numero_secuencial, pedido.created_at)}`,
+              fecha: new Date().toISOString(),
+            });
+            remanente = Math.round((remanente - aCubrir) * 100) / 100;
+          }
+
+          // C. Si todavía sobra remanente tras saldar todos los pedidos y deudas:
+          if (remanente > 0) {
+            await supabase.from('movimientos_saldo').insert({
+              cliente_id: pedido.cliente_id,
+              monto: remanente,
+              tipo: 'anticipo',
+              referencia_pedido_id: pedido.id,
+              nota: `Saldo a favor restante de pago en pedido #${formatearCodigo(pedido.numero_secuencial, pedido.created_at)}`,
+              fecha: new Date().toISOString(),
+            });
+          }
+        }
       }
 
       notificarOk(`Pago de $${montoNum.toLocaleString('es-AR')} registrado con éxito`);
@@ -323,7 +399,14 @@ export default function PedidoDetallePage({ params }: PageProps) {
           .eq('monto', -Number(pago.monto));
       }
 
-      // 2. Eliminar el pago
+      // 2. Si tenía excedente asociado a este pedido, eliminarlo para evitar saldo fantasma
+      await supabase
+        .from('movimientos_saldo')
+        .delete()
+        .eq('referencia_pedido_id', pedidoId)
+        .eq('tipo', 'excedente');
+
+      // 3. Eliminar el pago
       const { error } = await supabase.from('pagos').delete().eq('id', pago.id);
       if (error) throw error;
 

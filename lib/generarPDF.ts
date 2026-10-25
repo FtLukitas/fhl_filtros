@@ -1,7 +1,8 @@
 import jsPDF from 'jspdf';
 import type { ItemFactura } from '../app/admin/facturador/components/TablaItems';
-import type { Cliente } from './types';
+import type { Cliente, Pedido, Pago, MovimientoSaldo } from './types';
 import { supabase } from './supabase';
+import { calcularResumenCuentaCliente } from './cuentas-corrientes';
 
 export interface DatosPresupuesto {
   cliente: Cliente;
@@ -49,18 +50,17 @@ export async function obtenerEstadoCuentaCliente(
   try {
     let queryPed = supabase
       .from('pedidos')
-      .select('id, total, eliminado, created_at')
-      .eq('cliente_id', clienteId)
-      .neq('estado', 'cancelado');
+      .select('*')
+      .eq('cliente_id', clienteId);
 
     let queryPag = supabase
       .from('pagos')
-      .select('pedido_id, monto, fecha')
+      .select('*')
       .eq('cliente_id', clienteId);
 
     let queryMov = supabase
       .from('movimientos_saldo')
-      .select('monto, fecha')
+      .select('*')
       .eq('cliente_id', clienteId);
 
     if (fechaReferencia) {
@@ -76,20 +76,13 @@ export async function obtenerEstadoCuentaCliente(
 
     const [resPed, resPag, resMov] = await Promise.all([queryPed, queryPag, queryMov]);
 
-    const pagosPorPedido = new Map<string, number>();
-    (resPag.data || []).forEach((p: any) => {
-      pagosPorPedido.set(p.pedido_id, (pagosPorPedido.get(p.pedido_id) || 0) + Number(p.monto || 0));
+    const resumen = calcularResumenCuentaCliente({
+      pedidos: (resPed.data as Pedido[]) || [],
+      pagos: (resPag.data as Pago[]) || [],
+      movimientosSaldo: (resMov.data as MovimientoSaldo[]) || [],
     });
 
-    const deudaPed = (resPed.data || []).reduce((sum: number, p: any) => {
-      if (p.eliminado) return sum;
-      const pagado = pagosPorPedido.get(p.id) || 0;
-      return sum + Math.max(0, Number(p.total || 0) - pagado);
-    }, 0);
-
-    const balMov = (resMov.data || []).reduce((sum: number, m: any) => sum + Number(m.monto || 0), 0);
-    // Saldo neto unificado previo: créditos acumulados menos deuda de pedidos pendientes
-    const saldoNeto = balMov - deudaPed;
+    const saldoNeto = resumen.saldoNeto;
 
     if (saldoNeto < 0) {
       return {

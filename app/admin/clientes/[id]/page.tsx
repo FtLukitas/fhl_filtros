@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { generarPDF } from '@/lib/generarPDF';
 import { generarResumenCuentaPDF } from '@/lib/generarResumenCuentaPDF';
+import { calcularResumenCuentaCliente } from '@/lib/cuentas-corrientes';
 import { formatearCodigo } from '@/lib/codigos';
 import type { Cliente, Pedido, Pago, Presupuesto, MovimientoSaldo, PrecioCliente, ListaPrecio } from '@/lib/types';
 import ModalAjusteSaldo from '../components/ModalAjusteSaldo';
@@ -153,171 +154,35 @@ export default function ClienteDetallePage({ params }: PageProps) {
     cargarTodo();
   }, [cargarTodo]);
 
-  // Cálculos financieros unificados
-  const totalComprado = pedidos
-    .filter((p) => p.estado !== 'cancelado')
-    .reduce((sum, p) => sum + Number(p.total || 0), 0);
-
-  // Fondos efectivamente ingresados por el cliente (pagos externos + anticipos)
-  const pagosExternos = pagos
-    .filter((p) => p.metodo !== 'saldo_a_favor')
-    .reduce((sum, p) => sum + Number(p.monto || 0), 0);
-
-  const anticiposIngresados = movimientosSaldo
-    .filter((m) => Number(m.monto || 0) > 0 && m.tipo !== 'excedente')
-    .reduce((sum, m) => sum + Number(m.monto || 0), 0);
-
-  const totalAbonadoReal = pagosExternos + anticiposIngresados;
-  const totalPagado = totalAbonadoReal;
-
-  const pagosPorPedido = new Map<string, number>();
-  pagos.forEach((p) => {
-    pagosPorPedido.set(p.pedido_id, (pagosPorPedido.get(p.pedido_id) || 0) + Number(p.monto || 0));
-  });
-
-  const deudaPedidos = pedidos
-    .filter((p) => p.estado !== 'cancelado')
-    .reduce((sum, p) => {
-      const pagado = pagosPorPedido.get(p.id) || 0;
-      return sum + Math.max(0, Number(p.total || 0) - pagado);
-    }, 0);
-
-  const balanceMovimientos = movimientosSaldo.reduce((sum, m) => sum + Number(m.monto || 0), 0);
-
-  // Saldo Neto Unificado:
-  const saldoNeto = balanceMovimientos - deudaPedidos;
-  const saldoAFavor = saldoNeto > 0 ? saldoNeto : 0;
-  const deudaTotal = saldoNeto < 0 ? Math.abs(saldoNeto) : 0;
-
-  // Extracto cronológico unificado de cuenta corriente
-  const extractoCuenta = useMemo(() => {
-    const lista: {
-      id: string;
-      fecha: string;
-      tipo: 'pedido' | 'pago' | 'ajuste' | 'compensacion';
-      titulo: string;
-      subtitulo?: string;
-      debito: number; // Cargo (-)
-      credito: number; // Abono (+)
-      montoNeto: number; // + crédito, - débito
-      montoCompensado?: number;
-      referenciaId?: string;
-      estadoPago?: 'saldado' | 'parcial' | 'impago';
-    }[] = [];
-
-    // Mapa de pagos por pedido para enriquecer la fila del pedido
-    const pagosPorPedMap = new Map<string, Pago[]>();
-    pagos.forEach((p) => {
-      if (p.pedido_id) {
-        const arr = pagosPorPedMap.get(p.pedido_id) || [];
-        arr.push(p);
-        pagosPorPedMap.set(p.pedido_id, arr);
-      }
+  // Cálculos financieros y extracto unificados mediante el motor contable central (FIFO)
+  const resumenCuenta = useMemo(() => {
+    return calcularResumenCuentaCliente({
+      pedidos,
+      pagos,
+      movimientosSaldo,
     });
-
-    // 1. Pedidos (Cargos reales a la cuenta corriente)
-    pedidos
-      .filter((p) => p.estado !== 'cancelado')
-      .forEach((p) => {
-        const t = Number(p.total || 0);
-        const pagosPed = pagosPorPedMap.get(p.id) || [];
-        const pagadoSaldoAFavor = pagosPed
-          .filter((pg) => pg.metodo === 'saldo_a_favor')
-          .reduce((acc, cur) => acc + Number(cur.monto || 0), 0);
-        const totalAbonado = pagosPed.reduce((acc, cur) => acc + Number(cur.monto || 0), 0);
-        const saldadoCompleto = totalAbonado >= t && t > 0;
-        const estadoPago: 'saldado' | 'parcial' | 'impago' =
-          saldadoCompleto
-            ? 'saldado'
-            : totalAbonado > 0
-            ? 'parcial'
-            : 'impago';
-
-        let tagSaldado = '';
-        if (saldadoCompleto && pagadoSaldoAFavor >= t) {
-          tagSaldado = ' • Saldado con Saldo a Favor';
-        } else if (pagadoSaldoAFavor > 0) {
-          tagSaldado = ` • $${pagadoSaldoAFavor.toLocaleString('es-AR', { minimumFractionDigits: 2 })} con Saldo a Favor`;
-        } else if (saldadoCompleto) {
-          tagSaldado = ' • Saldado';
-        }
-
-        lista.push({
-          id: `ped-${p.id}`,
-          fecha: p.created_at,
-          tipo: 'pedido',
-          titulo: `Pedido #${formatearCodigo(p.numero_secuencial, p.created_at)}`,
-          subtitulo: `Estado: ${p.estado.toUpperCase()} • ${p.items?.length || 0} ítems${tagSaldado}`,
-          debito: t,
-          credito: 0,
-          montoNeto: -t,
-          referenciaId: p.id,
-          estadoPago,
-        });
-      });
-
-    // 2. Pagos y Compensaciones
-    pagos.forEach((p) => {
-      const m = Number(p.monto || 0);
-      const pedAsociado = p.pedido_id ? pedidos.find((x) => x.id === p.pedido_id) : null;
-      const refPed = pedAsociado ? `Pedido #${formatearCodigo(pedAsociado.numero_secuencial, pedAsociado.created_at)}` : 'cuenta';
-
-      if (p.metodo === 'saldo_a_favor') {
-        // La compensación de saldo a favor no es un ingreso externo.
-        // El débito del pedido ya figura en la fila de pedidos (con la aclaración "• Saldado con Saldo a Favor")
-        // y el crédito original ya figura en el Anticipo correspondiente.
-        // Omitimos esta fila para que cada pedido sea estrictamente 1 solo movimiento limpio en el extracto.
-        return;
-      } else {
-        // Cobranza real de fondos externos (efectivo, transferencia, cheque, etc.)
-        lista.push({
-          id: `pago-${p.id}`,
-          fecha: p.fecha || p.id,
-          tipo: 'pago',
-          titulo: `Pago / Cobranza (${p.metodo.toUpperCase()})`,
-          subtitulo: p.nota || `Imputado a ${refPed}`,
-          debito: 0,
-          credito: m,
-          montoNeto: m,
-          referenciaId: p.pedido_id || undefined,
-        });
-      }
-    });
-
-    // 3. Movimientos de Saldo (ajustes directos y anticipos de cuenta corriente)
-    movimientosSaldo.forEach((m) => {
-      // Omitir 'aplicado' porque ya está consolidado en la fila de 'compensacion' de pagos
-      // Omitir 'excedente' porque los fondos totales ya fueron acreditados en el pago
-      if (m.tipo === 'aplicado' || m.tipo === 'excedente') {
-        return;
-      }
-
-      const v = Number(m.monto || 0);
-      lista.push({
-        id: `mov-${m.id}`,
-        fecha: m.fecha || m.id,
-        tipo: 'ajuste',
-        titulo: `Ajuste de Saldo (${m.tipo.replace('_', ' ').toUpperCase()})`,
-        subtitulo: m.nota || 'Ajuste manual de cuenta',
-        debito: v < 0 ? Math.abs(v) : 0,
-        credito: v > 0 ? v : 0,
-        montoNeto: v,
-        referenciaId: m.referencia_pedido_id || undefined,
-      });
-    });
-
-    // Ordenar cronológicamente del más antiguo al más reciente para acumular saldo
-    lista.sort((a, b) => new Date(a.fecha).getTime() - new Date(b.fecha).getTime());
-
-    let saldoAcumulado = 0;
-    const conSaldo = lista.map((it) => {
-      saldoAcumulado += it.montoNeto;
-      return { ...it, saldoAcumulado };
-    });
-
-    // Mostrar el más reciente primero
-    return conSaldo.reverse();
   }, [pedidos, pagos, movimientosSaldo]);
+
+  const {
+    totalComprado,
+    totalPagado,
+    totalCargosManuales,
+    saldoNeto,
+    deudaTotal,
+    saldoAFavor,
+    deudaAnteriorRestante,
+    pedidosConEstadoFIFO,
+    extracto,
+  } = resumenCuenta;
+
+  // Extracto cronológico unificado para la UI (el más reciente primero)
+  const extractoCuenta = useMemo(() => {
+    return [...extracto].reverse();
+  }, [extracto]);
+
+  const balanceMovimientos = useMemo(() => {
+    return movimientosSaldo.reduce((sum, m) => sum + Number(m.monto || 0), 0);
+  }, [movimientosSaldo]);
 
   // Eliminar un movimiento de saldo individual
   const handleEliminarMovimientoSaldo = async (movId: string) => {
@@ -343,55 +208,40 @@ export default function ClienteDetallePage({ params }: PageProps) {
     if (!cliente) return;
     setDescargandoResumenPDF(true);
     try {
-      // Mapear lista de pedidos detallada con desglose de deuda
-      const pedidosParaPDF = pedidos
-        .filter((p) => !p.eliminado && p.estado !== 'cancelado')
-        .map((p) => {
-          const tot = Number(p.total || 0);
-          const pagado = pagosPorPedido.get(p.id) || 0;
-          const deuda = Math.max(0, tot - pagado);
-          const estadoPago: 'saldado' | 'parcial' | 'impago' =
-            deuda === 0 && tot > 0
-              ? 'saldado'
-              : pagado > 0
-              ? 'parcial'
-              : 'impago';
-
-          return {
-            id: p.id,
-            numeroSecuencial: p.numero_secuencial,
-            fecha: p.created_at,
-            total: tot,
-            totalAbonado: pagado,
-            deuda,
-            estadoLogistico: p.estado,
-            estadoPago,
-            itemsCount: p.items?.length || 0,
-          };
-        });
+      // Mapear lista de pedidos con deuda y estado FIFO real
+      const pedidosParaPDF = pedidosConEstadoFIFO.map((p) => ({
+        id: p.id,
+        numeroSecuencial: p.numero_secuencial,
+        fecha: p.created_at,
+        total: Number(p.total || 0),
+        totalAbonado: p.totalAbonadoFIFO,
+        deuda: p.deudaRestanteFIFO,
+        estadoLogistico: p.estado,
+        estadoPago: p.estadoPagoFIFO,
+        itemsCount: p.items?.length || 0,
+      }));
 
       // Mapear extracto cronológico (del más antiguo al más reciente para lectura formal)
-      const movimientosParaPDF = [...extractoCuenta]
-        .reverse()
-        .map((m) => ({
-          id: m.id,
-          fecha: m.fecha,
-          concepto: m.titulo,
-          detalle: m.subtitulo,
-          tipo: m.tipo,
-          debito: m.debito,
-          credito: m.credito,
-          montoCompensado: m.montoCompensado,
-          saldoAcumulado: m.saldoAcumulado,
-          referenciaId: m.referenciaId,
-          estadoPago: m.estadoPago,
-        }));
+      const movimientosParaPDF = extracto.map((m) => ({
+        id: m.id,
+        fecha: m.fecha,
+        concepto: m.titulo,
+        detalle: m.subtitulo,
+        tipo: m.tipo,
+        debito: m.debito,
+        credito: m.credito,
+        saldoAcumulado: m.saldoAcumulado,
+        referenciaId: m.referenciaId,
+        estadoPago: m.estadoPago,
+      }));
 
       await generarResumenCuentaPDF({
         cliente,
         saldoNeto,
         totalComprado,
         totalPagado,
+        deudaAnteriorTotal: totalCargosManuales,
+        deudaAnteriorPendiente: deudaAnteriorRestante,
         pedidos: pedidosParaPDF,
         movimientos: movimientosParaPDF,
       });
@@ -914,7 +764,8 @@ export default function ClienteDetallePage({ params }: PageProps) {
             ${totalComprado.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
           </span>
           <span className="text-[11px] text-slate-400 block mt-1">
-            {pedidos.filter((p) => p.estado !== 'cancelado').length} pedidos confirmados/entregados
+            {pedidos.filter((p) => !p.eliminado && p.estado !== 'cancelado').length} pedido(s)
+            {totalCargosManuales > 0 ? ` + $${totalCargosManuales.toLocaleString('es-AR', { minimumFractionDigits: 2 })} saldo ant.` : ' confirmados/entregados'}
           </span>
         </div>
 
@@ -924,7 +775,7 @@ export default function ClienteDetallePage({ params }: PageProps) {
             Total Fondos Ingresados
           </span>
           <span className="text-xl font-black text-emerald-700 font-mono">
-            ${totalAbonadoReal.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+            ${totalPagado.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
           </span>
           <span className="text-[11px] text-slate-400 block mt-1">
             Pagos externos y anticipos del cliente
@@ -1104,12 +955,10 @@ export default function ClienteDetallePage({ params }: PageProps) {
                                     ? 'bg-emerald-100 text-emerald-800'
                                     : mov.tipo === 'pedido'
                                     ? 'bg-slate-100 text-slate-800 border border-slate-200'
-                                    : mov.tipo === 'compensacion'
-                                    ? 'bg-purple-100 text-purple-800 border border-purple-200'
-                                    : 'bg-blue-100 text-blue-800'
+                                    : 'bg-blue-100 text-blue-800 border border-blue-200'
                                 }`}
                               >
-                                {mov.tipo === 'compensacion' ? 'Compensación' : mov.tipo}
+                                {mov.badge || mov.tipo}
                               </span>
                               {mov.tipo === 'pedido' && mov.estadoPago && (
                                 <span
@@ -1132,10 +981,6 @@ export default function ClienteDetallePage({ params }: PageProps) {
                           <td className="p-3 text-right font-mono font-bold text-emerald-700">
                             {mov.credito > 0 ? (
                               `+$${mov.credito.toLocaleString('es-AR', { minimumFractionDigits: 2 })}`
-                            ) : mov.montoCompensado && mov.montoCompensado > 0 ? (
-                              <span className="text-purple-700 bg-purple-50 border border-purple-200 px-1.5 py-0.5 rounded text-[11px] font-bold inline-block">
-                                Compensado ${mov.montoCompensado.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
-                              </span>
                             ) : (
                               '—'
                             )}
@@ -1189,8 +1034,10 @@ export default function ClienteDetallePage({ params }: PageProps) {
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {pedidos.map((p) => {
-                        const pagado = pagosPorPedido.get(p.id) || 0;
-                        const deuda = Math.max(0, Number(p.total || 0) - pagado);
+                        const fifo = pedidosConEstadoFIFO.find((x) => x.id === p.id);
+                        const esCancelado = p.estado === 'cancelado' || p.eliminado;
+                        const pagado = esCancelado ? 0 : (fifo?.totalAbonadoFIFO ?? 0);
+                        const deuda = esCancelado ? 0 : (fifo?.deudaRestanteFIFO ?? Number(p.total || 0));
 
                         return (
                           <tr key={p.id} className="hover:bg-slate-50/60 transition-colors">

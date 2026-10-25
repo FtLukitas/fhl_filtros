@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:saldos": "node scripts/test-cliente-aislado.mjs"
   },
   "dependencies": {
     "@digicroz/react-floating-whatsapp": "^1.0.2",

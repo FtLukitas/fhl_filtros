@@ -55,6 +55,7 @@ function FacturadorContenido() {
   const [observaciones, setObservaciones] = useState('');
   const [numeroPresupuesto, setNumeroPresupuesto] = useState('');
   const [validezDias, setValidezDias] = useState<number>(30);
+  const [fechaCreacionEdicion, setFechaCreacionEdicion] = useState<string | null>(null);
   const [generando, setGenerando] = useState(false);
   const [guardandoPedido, setGuardandoPedido] = useState(false);
   const [cargandoEdicion, setCargandoEdicion] = useState(modoEdicion);
@@ -115,6 +116,7 @@ function FacturadorContenido() {
         numeroPresupuesto: codigoFormateado,
         validezDias,
         pedidoId: modoEdicion ? pedidoIdAEditar : null,
+        fechaCreacion: modoEdicion ? fechaCreacionEdicion : null,
       });
       setPreviewUrl((prev) => {
         if (prev) URL.revokeObjectURL(prev);
@@ -355,6 +357,7 @@ function FacturadorContenido() {
             }
             setObservaciones(pedData.observaciones || '');
             setNumeroPresupuesto(formatearCodigo(pedData.numero_secuencial, pedData.created_at));
+            setFechaCreacionEdicion(pedData.created_at);
 
             if (pedData.items && pedData.items.length > 0) {
               setItems(
@@ -715,6 +718,7 @@ function FacturadorContenido() {
             numeroPresupuesto: numeroPresupuesto || formatearCodigo(pedidoIdAEditar),
             validezDias,
             pedidoId: pedidoIdAEditar,
+            fechaCreacion: fechaCreacionEdicion,
           });
         }
 
@@ -809,6 +813,7 @@ function FacturadorContenido() {
       setObservaciones('');
       setNumeroPresupuesto('');
       setValidezDias(30);
+      setFechaCreacionEdicion(null);
       setMensaje(null);
       setMostrarPreview(false);
       try {

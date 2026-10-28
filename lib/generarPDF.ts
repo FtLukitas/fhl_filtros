@@ -31,6 +31,56 @@ async function cargarImagenBase64(url: string): Promise<string> {
   });
 }
 
+function formatearFechaComprobante(fecha?: string | Date | null): string {
+  if (!fecha) {
+    return new Date().toLocaleDateString('es-AR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    });
+  }
+
+  if (typeof fecha === 'string') {
+    const limpia = fecha.trim();
+    if (!limpia) {
+      return new Date().toLocaleDateString('es-AR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+      });
+    }
+    // Formato simple YYYY-MM-DD para evitar el desfasaje horario UTC
+    if (/^\d{4}-\d{2}-\d{2}$/.test(limpia)) {
+      const [y, m, d] = limpia.split('-').map(Number);
+      return new Date(y, m - 1, d).toLocaleDateString('es-AR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+      });
+    }
+    const d = new Date(limpia);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleDateString('es-AR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+      });
+    }
+  } else if (fecha instanceof Date && !isNaN(fecha.getTime())) {
+    return fecha.toLocaleDateString('es-AR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    });
+  }
+
+  return new Date().toLocaleDateString('es-AR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+}
+
 export interface EstadoCuentaCliente {
   saldoNeto: number;
   tipo: 'deuda' | 'saldo_a_favor' | 'al_dia';
@@ -155,11 +205,7 @@ async function generarInstanciaPDF(datos: DatosPresupuesto): Promise<jsPDF> {
   const maxRowsPerPage = 21;
   const totalPages = Math.ceil(items.length / maxRowsPerPage) || 1;
 
-  const fecha = new Date().toLocaleDateString('es-AR', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-  });
+  const fecha = formatearFechaComprobante(datos.fechaCreacion);
 
   for (let pageIdx = 0; pageIdx < totalPages; pageIdx++) {
     if (pageIdx > 0) {
@@ -538,11 +584,7 @@ async function generarInstanciaPDF(datos: DatosPresupuesto): Promise<jsPDF> {
 
 export async function generarPDF(datos: DatosPresupuesto): Promise<void> {
   const doc = await generarInstanciaPDF(datos);
-  const fecha = new Date().toLocaleDateString('es-AR', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-  });
+  const fecha = formatearFechaComprobante(datos.fechaCreacion);
   const fechaStr = fecha.replace(/\//g, '-');
   const codigoDoc = datos.numeroPresupuesto ? `_${datos.numeroPresupuesto.replace(/[^a-zA-Z0-9_-]/g, '_')}` : '';
   const nombreArchivo = `presupuesto_${datos.cliente.nombre.replace(/\s+/g, '_').toLowerCase()}${codigoDoc}_${fechaStr}.pdf`;
